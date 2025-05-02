@@ -1,7 +1,7 @@
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import dataclass, field, fields
+from typing import List, Optional, Literal, Type, Sequence
 
 import numpy as np
 import torch
@@ -12,6 +12,7 @@ from transformers import AutoTokenizer, LlamaForCausalLM
 import wandb
 from src.dataset.mllm_dataset import CapDataset, TextDatasets, TextYNDatasets
 from src.model.llm.qwen import VLMQwenForCausalLM
+from src.model.encoder.prompt_dcformer import PromptDCFormerConfig
 from src.train.trainer import MLLMTrainer
 
 
@@ -83,6 +84,26 @@ class ModelArguments:
         default_factory=lambda: [64, 128],
         metadata={"help": "Output size of high feature."},
     )
+
+    ## Here are my custom model.
+    # is already on above, abandad this config.
+    # input_size: Sequence[int] = (512, 512, 256)
+    channels: Sequence[int] = (64, 96, 192, 384, 768)
+    in_channels: int = 1
+    kernel_sizes: Sequence[int] = (13, 11, 9, 7)
+    # MaskPrompt Encoder usage only
+    num_class: int = 512
+    # PositionEncoding usage only
+    scale: float = 1.
+    # PromptEncoder usage only
+    prompt_act: str = "GELU"
+    num_point_embeddings: int = 2  # positive and negative prompt point
+    num_box_embeddings: int = 2  # bounding box 2 points(top-left), (bottom-right)
+    # DCFormer usage only
+    num_blocks: Sequence[int] = (2, 2, 3, 5, 2)
+    block_types: Sequence[Literal["C", "T"]] = ("C", "C", "C", "C")
+    codebook_size: int = 8192
+    model_size: Optional[Literal["tiny", "base", "small", "large"]] = None
 
 
 @dataclass
@@ -274,21 +295,51 @@ def find_all_linear_names(model):
     return list(lora_module_names)
 
 
+def get_prompt_config(all_model_config: ModelArguments) -> PromptDCFormerConfig:
+    """
+    Generate a PromptDCFormerConfig from model arguments
+
+    If `model_size` is specified, use the default config for that model size.
+    Otherwise, use the fields of `PromptDCFormerConfig` as arguments to the constructor.
+
+    @param all_model_config: ModelArguments
+    @return: PromptDCFormerConfig
+
+    """
+
+    msize: Optional[str] = all_model_config.model_size
+    input_size = all_model_config.input_size
+
+    if msize is not None:
+        prompt_config = PromptDCFormerConfig.get_default_config(msize)(input_size)
+    else:
+        prompt_config_dict = dict()
+        for key in fields(PromptDCFormerConfig):
+            if (setting_value := getattr(all_model_config, key.name)) is None:
+                continue
+            prompt_config_dict[key.name] = setting_value
+        prompt_config = PromptDCFormerConfig(**prompt_config_dict)
+
+    return prompt_config
+
+
 @dataclass
 class DataCollator:
     def __call__(self, batch: list) -> dict:
-        images, input_ids, labels, attention_mask = tuple(
+        images, input_ids, labels, attention_mask, masks = tuple(
             [b[key] for b in batch]
-            for key in ("image", "input_id", "label", "attention_mask")
+            for key in ("image", "input_id", "label", "attention_mask", "mask")
         )
 
         images = torch.cat([_.unsqueeze(0) for _ in images], dim=0)
         input_ids = torch.cat([_.unsqueeze(0) for _ in input_ids], dim=0)
         labels = torch.cat([_.unsqueeze(0) for _ in labels], dim=0)
         attention_mask = torch.cat([_.unsqueeze(0) for _ in attention_mask], dim=0)
+        masks = torch.cat([_.unsqueeze(0) for _ in masks], dim=0)
 
         return_dict = dict(
             images=images,
+            masks=masks,
             input_ids=input_ids,
             labels=labels,
             attention_mask=attention_mask,
@@ -438,7 +489,11 @@ def main():
 
     if is_rank_zero():
         wandb.login()
-        wandb.init(project="MLLM", name=model_args.wb_name)
+        wandb.init(project="Prompt_MLLM", name=model_args.wb_name, config={
+            'model': vars(model_args),
+            'data': vars(data_args),
+            "training": vars(training_args)
+        })
 
     if os.path.exists(training_args.output_dir):
         checkpoints = sorted(

@@ -1,4 +1,15 @@
 from typing import Tuple
+import logging
+# logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+log_fmt = logging.Formatter(
+    '%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+file_log = logging.FileHandler('./log/dcformer.log', 'w+')
+file_log.setLevel(logging.DEBUG)
+file_log.setFormatter(log_fmt)
+logger.addHandler(file_log)
 
 import numpy as np
 import torch
@@ -436,8 +447,8 @@ class Encoder(nn.Module):
 
     def forward(self, x):
         hidden_states = []
-
-        x = x.permute(0, 1, 3, 4, 2)
+        # logger.debug(f'x shape: {x.shape}')
+        # x = x.permute(0, 1, 3, 4, 2)
 
         for i in range(5):
             if hasattr(self, "s" + str(i)):

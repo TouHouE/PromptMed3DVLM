@@ -78,7 +78,7 @@ class VLMMetaModel:
 
                 def get_w(weights, keyword):
                     return {
-                        f"{keyword}.{k.split(keyword + ".")[2]}": v
+                        f"{keyword}.{k.split(keyword + '.')[2]}": v
                         for k, v in weights.items()
                         if keyword in k
                     }

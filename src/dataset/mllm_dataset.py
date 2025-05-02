@@ -1,7 +1,20 @@
+import re
 import os
 import json
-import torch
 import random
+import logging
+# logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+log_fmt = logging.Formatter(
+    '%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+file_log = logging.FileHandler('./log/dataset.log', 'w+')
+file_log.setLevel(logging.DEBUG)
+file_log.setFormatter(log_fmt)
+logger.addHandler(file_log)
+
+import torch
 import numpy as np
 import monai.transforms as mtf
 import SimpleITK as sitk
@@ -9,6 +22,120 @@ import pandas as pd
 from monai.data import set_track_meta
 from torch.utils.data import Dataset, ConcatDataset
 from src.dataset.prompt_templates import Caption_templates
+
+
+PAD_EOS_SWAP_TMP_TOKEN = -100
+
+
+class CardiacDataset(Dataset):
+    image_root = '/mnt/sdi'
+
+    def __init__(self, args, tokenizer, mode='train'):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.mode = mode
+        self.image_tokens = '<im_patch>' * args.proj_out_num
+        self.data_list = list()
+        with open('/home/vcpuser/netdrive/Workspace/data/taipei_502_vqa.jsonl', 'r') as reader:
+            for pack in reader.readlines():
+                pack = json.loads(pack)
+                # pack['image'] = join(self.image_root, pack['image'])
+                self.data_list.append(pack)
+        self.image_loader = mtf.Compose([
+            mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.Spacingd(keys=['image', 'label'], pixdim=(.5, .5, .1), mode=('trilinear', 'nearest'),
+                         allow_missing_keys=True),
+            mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
+            mtf.ScaleIntensityd(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
+            # mtf.Orientationd("SRA"),
+            # Random Shit
+            mtf.RandRotate90d(prob=0.5, spatial_axes=(1, 2), keys=['image', 'label'], allow_missing_keys=True),
+            mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label'], allow_missing_keys=True),
+            mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label'], allow_missing_keys=True),
+            mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label'], allow_missing_keys=True),
+            mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image', 'label'], allow_missing_keys=True),
+            mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image', 'label'], allow_missing_keys=True),
+            mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True),
+        ])
+
+    def __getitem__(self, idx):
+        cur_pack = self.data_list[idx]
+        # cur_pack = check_image_and_download(cur_pack)
+        if cur_pack is None:
+            return self.__getitem__(idx + 1)
+        conv = cur_pack['conversations']
+        query = list(filter(lambda conv_case: conv_case['from'] == 'human', conv))[0]['value']
+        if re.fullmatch(r'<image>\n.*', query) is not None:
+            replace_key = '<image>\n'
+        else:
+            replace_key = '\n<image>'
+        query = query.replace(replace_key, '')
+        answer = list(filter(lambda conv_case: conv_case['from'] == 'gpt', conv))[0]['value']
+        if query is None or answer is None:
+            return self.__getitem__(idx + 1)
+
+        question = self.image_tokens + query
+
+        logger.info(f'question: {query}, answer: {answer}')
+        text_tensor = self.tokenizer(
+            question + " " + answer,
+            max_length=self.args.max_length,
+            truncation=True,
+            padding="max_length",
+            return_tensors="pt",
+        )
+
+        input_id = text_tensor["input_ids"][0]
+        attention_mask = text_tensor["attention_mask"][0]
+        valid_len = torch.sum(attention_mask)
+        if valid_len < len(input_id):
+            input_id[valid_len] = self.tokenizer.eos_token_id
+
+        question_tensor = self.tokenizer(
+            question,
+            max_length=self.args.max_length,
+            truncation=True,
+            padding="max_length",
+            return_tensors="pt",
+        )
+
+        question_len = torch.sum(question_tensor["attention_mask"][0])
+
+        label = input_id.clone()
+        label[:question_len] = PAD_EOS_SWAP_TMP_TOKEN
+        if self.tokenizer.pad_token_id == self.tokenizer.eos_token_id:
+            label[label == self.tokenizer.pad_token_id] = PAD_EOS_SWAP_TMP_TOKEN
+            if valid_len < len(label):
+                label[valid_len] = self.tokenizer.eos_token_id
+        else:
+            label[label == self.tokenizer.pad_token_id] = PAD_EOS_SWAP_TMP_TOKEN
+
+        loader_pack = {
+            'image': cur_pack['image'],
+        }
+        if cur_pack.get('label') is not None:
+            loader_pack['label'] = cur_pack['label']
+        logging.debug(f'Apply to loader:\n{json.dumps(loader_pack, indent=2)}')
+        visual_pack = self.image_loader(loader_pack)
+        if visual_pack.get('label') is None:
+            visual_pack['label'] = torch.zeros_like(visual_pack['image'])
+        # image = self.image_loader(join(self.image_root, cur_pack['image']))
+
+        return {
+            "image": visual_pack['image'],
+            'mask': visual_pack['label'],
+            "input_id": input_id,
+            "label": label,
+            "attention_mask": attention_mask,
+            "question": question,
+            "answer": answer,
+        }
+
+    def __len__(self):
+        return len(self.data_list)
+
 
 
 class CapDataset(Dataset):

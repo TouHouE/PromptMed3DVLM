@@ -13,6 +13,7 @@ file_log = logging.FileHandler('./log/dataset.log', 'w+')
 file_log.setLevel(logging.DEBUG)
 file_log.setFormatter(log_fmt)
 logger.addHandler(file_log)
+from os.path import join
 
 import torch
 import numpy as np
@@ -28,7 +29,7 @@ PAD_EOS_SWAP_TMP_TOKEN = -100
 
 
 class CardiacDataset(Dataset):
-    image_root = '/mnt/sdi'
+    image_root = '/home/jovyan/workspace/taipei'
 
     def __init__(self, args, tokenizer, mode='train'):
         self.args = args
@@ -36,10 +37,13 @@ class CardiacDataset(Dataset):
         self.mode = mode
         self.image_tokens = '<im_patch>' * args.proj_out_num
         self.data_list = list()
-        with open('/home/vcpuser/netdrive/Workspace/data/taipei_502_vqa.jsonl', 'r') as reader:
+        with open('/home/jovyan/workspace/taipei/taipei_502_vqa.jsonl', 'r') as reader:            
             for pack in reader.readlines():
                 pack = json.loads(pack)
-                # pack['image'] = join(self.image_root, pack['image'])
+                pack['image'] = join(self.image_root, 'to_saturn', pack['image'])
+                if 'label' in pack:
+                    pack['label'] = join(self.image_root, 'to_saturn', pack['label'])
+                
                 self.data_list.append(pack)
         self.image_loader = mtf.Compose([
             mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
@@ -113,7 +117,7 @@ class CardiacDataset(Dataset):
             label[label == self.tokenizer.pad_token_id] = PAD_EOS_SWAP_TMP_TOKEN
 
         loader_pack = {
-            'image': cur_pack['image'],
+            'image': cur_pack['image']
         }
         if cur_pack.get('label') is not None:
             loader_pack['label'] = cur_pack['label']

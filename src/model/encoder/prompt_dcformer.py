@@ -46,6 +46,7 @@ class PromptDCFormerConfig(HFT.PretrainedConfig):
     codebook_size: int = 8192
     model_size: Optional[Literal["tiny", "base", "small", "large"]] = None
     hybrid_embeddings: bool = True
+    attn_implementation: str = 'sdpa'
 
     @classmethod
     def large_config(cls, input_size=(512, 512, 256)):
@@ -291,8 +292,12 @@ class PromptDCFormer(nn.Module):
 class MaskPromptDCFormer(nn.Module):
     def __init__(self, config: PromptDCFormerConfig):
         super().__init__()
+        if isinstance(config, dict):
+            config = PromptDCFormerConfig.from_dict(config)
+
         if config.model_size is not None:
             config = PromptDCFormerConfig.get_default_config(config.model_size)
+
         logger.debug(f'Final visual tower config:\n{json.dumps(config.to_dict())}')
         self.config = config
         self.dcformer = DCFormer(config)

@@ -1,4 +1,15 @@
 from abc import ABC, abstractmethod
+import logging
+# logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+log_fmt = logging.Formatter(
+    '%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+file_log = logging.FileHandler('./log/vlm_arch_abstract.log', 'w+')
+file_log.setLevel(logging.DEBUG)
+file_log.setFormatter(log_fmt)
+logger.addHandler(file_log)
 
 import torch
 from transformers import AutoModel
@@ -14,6 +25,7 @@ class VLMMetaModel:
         super(VLMMetaModel, self).__init__(config)
 
         if hasattr(config, "vision_tower"):
+            self.init_vision_tower_name = config.vision_tower
             self.vision_tower = build_vision_tower(config, delay_load=True)
             self.mm_projector = build_mm_projector(config)
 
@@ -36,9 +48,12 @@ class VLMMetaModel:
         self.config.mm_projector_type = model_args.mm_projector_type
         self.config.mm_mlp_depth = model_args.mm_mlp_depth
         self.config.proj_out_num = model_args.proj_out_num
-
+        if model_args.vision_tower != 'dcformer':
+            self.config.vision_tower_config = model_args.vision_tower_config
+        print(f'vlm_arch.py:: VLMMetaModel-71:: self.config.vision_tower: {self.config.vision_tower}')
         # vision tower
-        if self.get_vision_tower() is None:
+        
+        if no_vision_tower := self.get_vision_tower() is None:
             self.vision_tower = build_vision_tower(self.config)
             self.vision_tower.requires_grad_(not model_args.freeze_vision_tower)
 
@@ -50,11 +65,18 @@ class VLMMetaModel:
                 self.config.high_output_size = model_args.high_output_size
                 self.config.low_input_size = (256, 384)
                 self.config.high_input_size = (32, 768)
+        elif not no_vision_tower and self.vision_tower != 'dcformer':
+            print(f'Re-declare vision_tower with: {self.config}')
+            self.vision_tower = build_vision_tower(self.config)
+            self.vision_tower.requires_grad_(not model_args.freeze_vision_tower)
+            
 
         if model_args.pretrain_vision_model is not None:
             vision_model_weights = torch.load(
                 model_args.pretrain_vision_model, map_location="cpu"
             )
+            logger.info(f'vision_tower: {model_args.vision_tower}')
+            # print(f'vlm_arch.py:: VLMMetaModel-71:: vision_tower: {model_args.vision_tower}')
             if model_args.vision_tower in ['mask_prompt_dcformer', 'prompt_dcformer']:
                 if model_args.pretrain_vision_model_status == 'dcformer':
                     self.vision_tower.vision_tower.load_dcformer_state(
@@ -64,10 +86,10 @@ class VLMMetaModel:
                     self.vision_tower.vision_tower.load_state_dict(
                         vision_model_weights, strict=True
                     )
-
-            self.vision_tower.vision_tower.load_state_dict(
-                vision_model_weights, strict=True
-            )
+            else:
+                self.vision_tower.vision_tower.load_state_dict(
+                    vision_model_weights, strict=True
+                )
 
         if model_args.pretrain_clip_model is not None:
             clip_model = AutoModel.from_pretrained(model_args.pretrain_clip_model)

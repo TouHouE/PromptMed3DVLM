@@ -344,9 +344,9 @@ def get_prompt_config(all_model_config: ModelArguments) -> PromptDCFormerConfig:
     else:
         prompt_config_dict = dict()
         for key in fields(PromptDCFormerConfig):
-            if (setting_value := getattr(all_model_config, key.name)) is None:
+            if not hasattr(all_model_config, key.name):
                 continue
-            prompt_config_dict[key.name] = setting_value
+            prompt_config_dict[key.name] = getattr(all_model_config, key.name)
         prompt_config = PromptDCFormerConfig(**prompt_config_dict)
 
     return prompt_config

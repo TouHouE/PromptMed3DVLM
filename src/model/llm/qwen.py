@@ -67,7 +67,7 @@ class VLMQwenForCausalLM(Qwen2ForCausalLM, VLMMetaForCausalLM):
                 inputs_embeds,
                 labels,
             ) = self.prepare_inputs_for_multimodal(
-                input_ids, position_ids, attention_mask, past_key_values, labels, images
+                input_ids, position_ids, attention_mask, past_key_values, labels, images, **kwargs
             )
 
         return super().forward(

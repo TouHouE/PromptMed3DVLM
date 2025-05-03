@@ -6,10 +6,10 @@ deepspeed src/train/train_vlm.py \
     --vision_tower "dcformer" \
     --model_name_or_path Qwen/Qwen2.5-7B-Instruct \
     --model_type vlm_qwen \
+    --pretrain_vision_model ./output/DCFormer_SigLIP/pretrained_ViT.bin \
     --mm_projector_type "mixer" \
     --lora_enable True \
     --vision_select_layer -2 \
-    --pretrain_vision_model ./output/DCFormer_SigLIP/pretrained_ViT.bin \
     --pretrain_mm_mlp_adapter ./output/Med3DVLM-Qwen-2.5-7B-pretrain/mm_projector.bin \
     --data_root ./data \
     --bf16 True \

@@ -10,7 +10,7 @@ import transformers
 from transformers import AutoTokenizer, LlamaForCausalLM
 
 import wandb
-from src.dataset.mllm_dataset import CapDataset, TextDatasets, TextYNDatasets
+from src.dataset.mllm_dataset import CapDataset, TextDatasets, TextYNDatasets, CardiacDataset
 from src.model.llm.qwen import VLMQwenForCausalLM
 from src.model.encoder.prompt_dcformer import PromptDCFormerConfig
 from src.train.trainer import MLLMTrainer
@@ -31,6 +31,29 @@ def rank0_print(*args):
         print(*args)
 
 
+def print_trainable_parameters(model):
+    trainable_params = 0
+    all_param = 0
+    tot_table = dict()
+    train_table = dict()
+    for name, param in model.named_parameters():
+        second_name = name.split('.')[1]
+        all_param += param.numel()
+        tot_table[second_name] = tot_table.get(second_name, 0) + param.numel()
+        if param.requires_grad:
+            trainable_params += param.numel()
+            train_table[second_name] = train_table.get(second_name, 0) + param.numel()
+        # print(f"{name}: requires_grad={param.requires_grad}, numel={param.numel()}")
+    print(f'Module Name || Module Trainable(MB) || Pecentage Trainable(%)')
+    for key in tot_table.keys():
+        trainable = (2 * train_table.get(key, 0)) / (1024 ** 2)
+        percent = 100 * (train_table.get(key, 0) / tot_table[key])
+        print(f'{key:12} || {float(trainable):18.4f} || {float(percent):.4f}')
+    print(
+        f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.2f}"
+    )
+
+
 @dataclass
 class ModelArguments:
     wb_name: Optional[str] = field(default="MLLM")
@@ -39,8 +62,13 @@ class ModelArguments:
         metadata={"help": "Path to the LLM or MLLM."},
     )
     model_type: Optional[str] = field(default="vlm_qwen")
+    """
+        Which part should freeze
+    """
+    freeze_backbone: bool = field(default=False)    # For LLM
+    freeze_vision_tower: bool = field(default=False)    # For Vision Encoder
+    freeze_prompt_encoder: bool = field(default=False)  # For my custom module.
 
-    freeze_backbone: bool = field(default=False)
     pretrain_mllm: Optional[str] = field(default=None)
 
     tune_mm_mlp_adapter: bool = field(
@@ -65,11 +93,12 @@ class ModelArguments:
     pretrain_vision_model: str = field(
         default=None, metadata={"help": "Path to pretrained model for ViT."}
     )
+    pretrain_vision_model_status: str = field(
+        default="dcformer"
+    )
     pretrain_clip_model: str = field(
         default=None, metadata={"help": "Path to pretrained model for CLIP."}
     )
-    freeze_vision_tower: bool = field(default=False)
-
     # projector
     mm_projector_type: Optional[str] = field(default="mlp")
     mm_mlp_depth: int = field(
@@ -415,6 +444,7 @@ def main():
         model.gradient_checkpointing_enable()
 
     if model_args.vision_tower is not None:
+        model_args.vision_tower_config = get_prompt_config(model_args)
         model.get_model().initialize_vision_modules(model_args=model_args)
 
     model.config.tune_mm_mlp_adapter = training_args.tune_mm_mlp_adapter = (
@@ -433,6 +463,15 @@ def main():
         model.load_state_dict(ckpt, strict=True)
         rank0_print("load pretrained MLLM weights.")
 
+    if not model_args.freeze_vision_tower:
+        for name, param in model.named_parameters():
+            if 'vision_tower' in name:
+                param.requires_grad = True
+    if not model_args.freeze_prompt_encoder:
+        for name, param in model.named_parameters():
+            if 'prompt_encoder' in name:
+                param.requires_grad = True
+
     if training_args.lora_enable:
         from peft import LoraConfig, get_peft_model
 
@@ -449,31 +488,26 @@ def main():
 
         for n, p in model.named_parameters():
             if any(
-                [
-                    x in n
-                    for x in [
-                        "vision_tower",
-                        "mm_projector",
-                        "embed_tokens",
-                        "lm_head",
-                    ]
-                ]
+                [x in n for x in ["vision_tower", "mm_projector", "embed_tokens", "lm_head"]]
             ):
                 p.requires_grad = True
 
         model.print_trainable_parameters()
+    elif is_rank_zero():
+        print_trainable_parameters(model)
 
     rank0_print("=" * 20 + " Dataset preparation " + "=" * 20)
     data_args.max_length = training_args.model_max_length
     data_args.proj_out_num = model.get_model().mm_projector.proj_out_num
     rank0_print("vision tokens output from projector: ", data_args.proj_out_num)
 
-    if model_args.tune_mm_mlp_adapter:
-        train_dataset = TextDatasets(data_args, tokenizer, mode="train")
-    else:
-        train_dataset = TextYNDatasets(data_args, tokenizer, mode="train")
+    # if model_args.tune_mm_mlp_adapter:
+    #     train_dataset = TextDatasets(data_args, tokenizer, mode="train")
+    # else:
+    #     train_dataset = TextYNDatasets(data_args, tokenizer, mode="train")
+    train_dataset = CardiacDataset(data_args, tokenizer)
 
-    eval_dataset = CapDataset(data_args, tokenizer, mode="validation")
+    # eval_dataset = CapDataset(data_args, tokenizer, mode="validation")
     data_collator = DataCollator()
 
     rank0_print("=" * 20 + " Training " + "=" * 20)
@@ -482,7 +516,7 @@ def main():
         args=training_args,
         data_collator=data_collator,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        # eval_dataset=eval_dataset,
         compute_metrics=compute_metrics,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     )

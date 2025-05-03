@@ -3,14 +3,15 @@
 deepspeed src/train/train_vlm.py \
     --deepspeed ./scripts/zero2.json \
     --wb_name PromptMed3DVLM-Qwen-2.5-7B-lora \
-    --vision_tower "prompt_dcformer" \
-    --model_name_or_path Qwen/Qwen2.5-7B-Instruct \
+    --vision_tower prompt_dcformer \
+    --pretrain_vision_model_status dcformer \
+    --model_size small \
+    --model_name_or_path /home/jovyan/workspace/Med3DVLM/models/VLM \
     --model_type vlm_qwen \
-    --pretrain_vision_model ./output/DCFormer_SigLIP/pretrained_ViT.bin \
+    --pretrain_vision_model /home/jovyan/workspace/Med3DVLM/models/dcformer/pretrained_ViT.bin \
     --mm_projector_type "mixer" \
     --lora_enable True \
     --vision_select_layer -2 \
-    --pretrain_mllm /home/jovyan/workspace/Med3DVLM/models/VLM \
     --data_root ./data \
     --bf16 True \
     --output_dir ./output/PromptMed3DVLM-Qwen-2.5-7B-lora \

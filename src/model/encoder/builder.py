@@ -5,7 +5,7 @@ log_fmt = logging.Formatter(
     '%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-file_log = logging.FileHandler('./log/prompt_visual_encoder.log', 'w+')
+file_log = logging.FileHandler('./log/prompt_visual_encoder.log', 'a+')
 file_log.setLevel(logging.DEBUG)
 file_log.setFormatter(log_fmt)
 logger.addHandler(file_log)
@@ -33,6 +33,11 @@ class VisionTower(nn.Module):
         logger.debug(f'the select_layer is {self.select_layer}')
         logger.debug(f'the select_feature is {self.select_feature}')
 
+        # TODO: here is debug information
+        # Why using print? logger not working...
+        # print(f'builder.py::the vision_tower is {config.vision_tower}')
+        # print(f'builder.py::the select_layer is {self.select_layer}')
+        # print(f'builder.py::the select_feature is {self.select_feature}')
         if config.vision_tower == "vit3d":
             self.vision_tower = Vit3D(
                 input_size=config.input_size,

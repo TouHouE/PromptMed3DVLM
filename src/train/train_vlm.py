@@ -526,7 +526,7 @@ def main():
         wandb.init(project="Prompt_MLLM", name=model_args.wb_name, config={
             'model': vars(model_args),
             'data': vars(data_args),
-            "training": vars(training_args)
+            "training": training_args
         })
 
     if os.path.exists(training_args.output_dir):

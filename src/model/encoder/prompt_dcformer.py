@@ -45,7 +45,6 @@ class PromptDCFormerConfig(HFT.PretrainedConfig):
     block_types: Sequence[Literal["C", "T"]] = ("C", "C", "C", "C")
     codebook_size: int = 8192
     model_size: Optional[Literal["tiny", "base", "small", "large"]] = None
-    hybrid_embeddings: bool = True
     attn_implementation: str = 'sdpa'
 
     @classmethod

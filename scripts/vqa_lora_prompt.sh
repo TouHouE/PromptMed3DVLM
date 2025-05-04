@@ -16,7 +16,7 @@ deepspeed src/train/train_vlm.py \
     --bf16 True \
     --output_dir ./output/PromptMed3DVLM-Qwen-2.5-7B-lora \
     --num_train_epochs 5 \
-    --per_device_train_batch_size 8 \
+    --per_device_train_batch_size 64 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 1 \
     --eval_strategy "no" \
@@ -24,8 +24,8 @@ deepspeed src/train/train_vlm.py \
     --eval_steps 0.04 \
     --save_strategy "steps" \
     --save_steps 10 \
-    --save_total_limit 1 \
-    --learning_rate 5e-5 \
+    --save_total_limit 2 \
+    --learning_rate 4e-4 \
     --weight_decay 0. \
     --warmup_ratio 0.03 \
     --lr_scheduler_type "cosine" \

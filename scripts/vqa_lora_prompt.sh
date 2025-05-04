@@ -23,7 +23,7 @@ deepspeed src/train/train_vlm.py \
     --eval_accumulation_steps 1 \
     --eval_steps 0.04 \
     --save_strategy "steps" \
-    --save_steps 1000 \
+    --save_steps 10 \
     --save_total_limit 1 \
     --learning_rate 5e-5 \
     --weight_decay 0. \

@@ -3,6 +3,7 @@ import os
 import json
 import random
 import logging
+from functools import partial
 # logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 log_fmt = logging.Formatter(
@@ -27,6 +28,30 @@ from src.dataset.prompt_templates import Caption_templates
 
 PAD_EOS_SWAP_TMP_TOKEN = -100
 
+# A debugging usage method
+def return_print(data, stage=None):
+    if stage is not None:
+        print(f'\nStart {stage}')
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if torch.is_tensor(value):
+                print(f'{key}:: {value.shape}')
+            else:
+                print(f'{key}:: {value}')
+    elif isinstance(data, list):
+        for idx, value in enumerate(data):
+            if torch.is_tensor(value):
+                print(f'{idx}-th:: {value.shape}')
+            else:
+                print(f'{idx}-th:: {value}')
+    elif torch.is_tensor(data):
+        print(f'{data.shape}')
+    else:
+        print(f'{data}')
+    if stage is not None:
+        print(f'End of {stage}')
+
+    return data
 
 class CardiacDataset(Dataset):
     image_root = '/home/jovyan/workspace/taipei'
@@ -48,23 +73,29 @@ class CardiacDataset(Dataset):
         self.image_loader = mtf.Compose([
             mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
             mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
-            mtf.Spacingd(keys=['image', 'label'], pixdim=(.5, .5, .1), mode=('trilinear', 'nearest'),
-                         allow_missing_keys=True),
             mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
+            # mtf.Lambda(lambda pack: return_print(pack, 'After Orientation')),
+            mtf.Spacingd(keys=['image', 'label'], pixdim=(.4, .4, -1), mode=('trilinear', 'nearest'),
+                         allow_missing_keys=True),            
             mtf.ScaleIntensityd(keys=['image', 'label'], allow_missing_keys=True),
             mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
+            # mtf.Lambda(lambda pack: return_print(pack, 'After Resize')),
+            # mtf.Lambda(lambda pack: {key: value if value.shape[2] == 256 else value.permute(0, 1, 3, 2) for key, value in pack.items()}),
+            # mtf.Lambda(lambda pack: return_print(pack, 'After Custom permute')),
             # mtf.Orientationd("SRA"),
             # Random Shit
-            mtf.RandRotate90d(prob=0.5, spatial_axes=(1, 2), keys=['image', 'label'], allow_missing_keys=True),
+            # mtf.RandRotate90d(prob=0.5, spatial_axes=(1, 2), keys=['image', 'label'], allow_missing_keys=True),
             mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label'], allow_missing_keys=True),
             mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label'], allow_missing_keys=True),
             mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label'], allow_missing_keys=True),
             mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image', 'label'], allow_missing_keys=True),
             mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image', 'label'], allow_missing_keys=True),
             mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True),
+            # mtf.Lambda(lambda pack: return_print(pack, 'After ToTensor'))
         ])
 
     def __getitem__(self, idx):
+        # print(f'Start Loading {idx}')
         cur_pack = self.data_list[idx]
         # cur_pack = check_image_and_download(cur_pack)
         if cur_pack is None:
@@ -123,9 +154,14 @@ class CardiacDataset(Dataset):
             loader_pack['label'] = cur_pack['label']
         logging.debug(f'Apply to loader:\n{json.dumps(loader_pack, indent=2)}')
         visual_pack = self.image_loader(loader_pack)
-        if visual_pack.get('label') is None:
+        # print(f'image.shape:{visual["image"].shape}||{cur_pack["image"]}')
+
+        if visual_pack.get('label') is None:            
             visual_pack['label'] = torch.zeros_like(visual_pack['image'])
+        # print(f'{idx} is Done')
         # image = self.image_loader(join(self.image_root, cur_pack['image']))
+        
+        
 
         return {
             "image": visual_pack['image'],
@@ -135,6 +171,8 @@ class CardiacDataset(Dataset):
             "attention_mask": attention_mask,
             "question": question,
             "answer": answer,
+            'image_file': cur_pack['image'],
+            'label_file': cur_pack.get('label', 'None')
         }
 
     def __len__(self):
@@ -547,3 +585,13 @@ class TextYNDatasets(Dataset):
 
     def __getitem__(self, idx):
         return self.dataset[idx]
+
+
+if __name__ == '__main__':
+    import transformers as HFT
+    from argparse import Namespace
+    _tokenizer = HFT.AutoTokenizer.from_pretrained('/home/jovyan/workspace/Med3DVLM/models/VLM')
+    _args = Namespace(proj_out_num=256, max_length=2048)
+    ds = CardiacDataset(_args, _tokenizer)
+    for pack in ds:
+        pass

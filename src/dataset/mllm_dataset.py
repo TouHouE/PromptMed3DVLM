@@ -153,7 +153,10 @@ class CardiacDataset(Dataset):
         if cur_pack.get('label') is not None:
             loader_pack['label'] = cur_pack['label']
         logging.debug(f'Apply to loader:\n{json.dumps(loader_pack, indent=2)}')
-        visual_pack = self.image_loader(loader_pack)
+        try:
+            visual_pack = self.image_loader(loader_pack)
+        except Exception as e:
+            return self.__getitem__(idx + 1)
         # print(f'image.shape:{visual["image"].shape}||{cur_pack["image"]}')
 
         if visual_pack.get('label') is None:            

@@ -359,14 +359,18 @@ class DataCollator:
             [b[key] for b in batch]
             for key in ("image", "input_id", "label", "attention_mask", "mask", 'image_file', 'label_file')
         )
-        print(f'{"||".join([str(_.shape) for _ in images])}')
-        print(f'{"||".join(_image_files)}')
+        # print(f'{"||".join([str(_.shape) for _ in images])}')
+        # print(f'{"||".join(_image_files)}')
         # images = torch.cat([_.unsqueeze(0) for _ in images], dim=0)
         images = torch.stack(images, dim=0)
-        input_ids = torch.cat([_.unsqueeze(0) for _ in input_ids], dim=0)
-        labels = torch.cat([_.unsqueeze(0) for _ in labels], dim=0)
-        attention_mask = torch.cat([_.unsqueeze(0) for _ in attention_mask], dim=0)
-        masks = torch.cat([_.unsqueeze(0) for _ in masks], dim=0)
+        input_ids = torch.stack(input_ids, dim=0)
+        labels = torch.stack(labels, dim=0)
+        attention_mask = torch.stack(attention_mask, dim=0)
+        masks = torch.stack(masks, dim=0)
+        # input_ids = torch.cat([_.unsqueeze(0) for _ in input_ids], dim=0)
+        # labels = torch.cat([_.unsqueeze(0) for _ in labels], dim=0)
+        # attention_mask = torch.cat([_.unsqueeze(0) for _ in attention_mask], dim=0)
+        # masks = torch.cat([_.unsqueeze(0) for _ in masks], dim=0)
 
         return_dict = dict(
             images=images,

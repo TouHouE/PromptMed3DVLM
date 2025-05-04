@@ -355,12 +355,14 @@ def get_prompt_config(all_model_config: ModelArguments) -> PromptDCFormerConfig:
 @dataclass
 class DataCollator:
     def __call__(self, batch: list) -> dict:
-        images, input_ids, labels, attention_mask, masks = tuple(
+        images, input_ids, labels, attention_mask, masks, _image_files, _label_files = tuple(
             [b[key] for b in batch]
-            for key in ("image", "input_id", "label", "attention_mask", "mask")
+            for key in ("image", "input_id", "label", "attention_mask", "mask", 'image_file', 'label_file')
         )
-
-        images = torch.cat([_.unsqueeze(0) for _ in images], dim=0)
+        print(f'{"||".join([str(_.shape) for _ in images])}')
+        print(f'{"||".join(_image_files)}')
+        # images = torch.cat([_.unsqueeze(0) for _ in images], dim=0)
+        images = torch.stack(images, dim=0)
         input_ids = torch.cat([_.unsqueeze(0) for _ in input_ids], dim=0)
         labels = torch.cat([_.unsqueeze(0) for _ in labels], dim=0)
         attention_mask = torch.cat([_.unsqueeze(0) for _ in attention_mask], dim=0)
@@ -492,7 +494,8 @@ def main():
             ):
                 p.requires_grad = True
 
-        model.print_trainable_parameters()
+        print_trainable_parameters(model)
+        model.print_trainable_parameters()        
     elif is_rank_zero():
         print_trainable_parameters(model)
 

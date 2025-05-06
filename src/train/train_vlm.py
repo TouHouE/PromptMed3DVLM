@@ -460,18 +460,20 @@ def main():
     model_args.vocab_size = len(tokenizer)
     rank0_print("vocab_size: ", model_args.vocab_size)
 
-    if model_args.mm_projector_type is not None:
-        if model_args.mm_projector_type == "low_high_mlp":
-            model_args.proj_out_num = 288
-        elif (
-            model_args.mm_projector_type == "mlp"
-            or model_args.mm_projector_type == "mhsa"
-        ):
-            model_args.proj_out_num = 32
-        else:
-            model_args.proj_out_num = 256
-    else:
+    if model_args.mm_projector_type is None:
         raise ValueError(f"Unknown Projector Type {model_args.mm_projector_type}")
+
+    if model_args.mm_projector_type == "low_high_mlp":
+        model_args.proj_out_num = 288
+    elif (
+        model_args.mm_projector_type == "mlp"
+        or model_args.mm_projector_type == "mhsa"
+    ):
+        model_args.proj_out_num = 32
+    else:
+        model_args.proj_out_num = 256
+
+
 
     rank0_print("=" * 20 + " Model preparation " + "=" * 20)
     if model_args.vision_tower is not None:
@@ -515,17 +517,20 @@ def main():
 
     if model_args.pretrain_mllm:
         ckpt = torch.load(model_args.pretrain_mllm, map_location="cpu")
-        model.load_state_dict(ckpt, strict=True)
+        key_not_in_model, key_not_in_ckpt = model.load_state_dict(ckpt, strict=False)
         rank0_print("load pretrained MLLM weights.")
 
     if not model_args.freeze_vision_tower:
         for name, param in model.named_parameters():
             if 'vision_tower' in name:
                 param.requires_grad = True
-    if not model_args.freeze_prompt_encoder:
+    if not model_args.freeze_prompt_encoder and model_args.model_type in ['mask_prompt_dcformer', 'prompt_dcformer']:
         for name, param in model.named_parameters():
             if 'prompt_encoder' in name:
                 param.requires_grad = True
+    elif not model_args.freeze_prompt_encoder and model_args.model_type not in ['mask_prompt_dcformer', 'prompt_dcformer']:
+        rank0_print("Current VisionTower doesn't contains any `prompt_encoder`\nSetting `freeze_prompt_encoder` to `True` is useless.")
+
 
     if training_args.lora_enable:
         from peft import LoraConfig, get_peft_model

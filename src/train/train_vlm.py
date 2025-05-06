@@ -70,6 +70,10 @@ class ModelArguments:
     freeze_prompt_encoder: bool = field(default=False)  # For my custom module.
 
     pretrain_mllm: Optional[str] = field(default=None)
+    tune_vision_encoder: bool = field(
+        default=True,
+        metadata={'help': 'Decision vision_tower will be saved or not.'}
+    )
 
     tune_mm_mlp_adapter: bool = field(
         default=False,
@@ -268,6 +272,7 @@ def get_mm_projector_state_maybe_zero_3(named_params, keys_to_match):
 
 def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: str):
     """Collects the state dict and dump to disk."""
+    need2return = False
 
     if getattr(trainer.args, "tune_mm_mlp_adapter", False):
         # Only save projector and embed_tokens in pretrain
@@ -292,6 +297,33 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: st
                 torch.save(
                     weight_to_save, os.path.join(output_dir, f"mm_projector.bin")
                 )
+        need2return = True
+
+    if getattr(trainer.args, 'tune_vision_encoder', False):
+        keys2match = ['vision_tower']
+        weight2save = get_mm_projector_state_maybe_zero_3(
+            trainer.model.named_parameters(), keys2match
+        )
+        trainer.model.config.save_pretrained(output_dir)
+        current_folder = output_dir.split('/')[-1]
+        parent_folder = os.path.dirname(output_dir)
+        if trainer.args.local_rank > 0:
+            return
+
+        if current_folder.startswith("checkpoint-"):
+            visual_encoder_folder = os.path.join(parent_folder, "visual_encoder")
+            os.makedirs(visual_encoder_folder, exist_ok=True)
+            torch.save(
+                weight2save,
+                os.path.join(visual_encoder_folder, f"{current_folder}.bin"),
+            )
+        else:
+            torch.save(
+                weight2save, os.path.join(output_dir, f"visual_encoder.bin")
+            )
+            need2return = True
+
+    if need2return:
         return
 
     if trainer.deepspeed:
@@ -352,6 +384,17 @@ def get_prompt_config(all_model_config: ModelArguments) -> PromptDCFormerConfig:
     return prompt_config
 
 
+def get_trainable_parameter_when_lora(_lora_model) -> list[str]:
+    m2save: list[str] = list()
+    for name, param in _lora_model.named_parameters():
+        if 'lora' in name:
+            continue
+
+        if param.requires_grad:
+            m2save.append(name)
+    return m2save
+
+
 @dataclass
 class DataCollator:
     def __call__(self, batch: list) -> dict:
@@ -387,6 +430,9 @@ def main():
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments)
     )
+    model_args: ModelArguments
+    data_args: DataArguments
+    training_args: TrainingArguments
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     rank0_print("=" * 20 + " Tokenizer preparation " + "=" * 20)
@@ -456,6 +502,9 @@ def main():
     model.config.tune_mm_mlp_adapter = training_args.tune_mm_mlp_adapter = (
         model_args.tune_mm_mlp_adapter
     )
+    model.config.tune_vision_encoder = model_args.tune_vision_encoder
+    training_args.tune_vision_encoder = model_args.tune_vision_encoder
+
     if model_args.tune_mm_mlp_adapter:
         model.requires_grad_(False)
         for p in model.get_model().mm_projector.parameters():
@@ -480,7 +529,9 @@ def main():
 
     if training_args.lora_enable:
         from peft import LoraConfig, get_peft_model
-
+        modules_to_save = list()
+        if training_args.tune_vision_encoder:
+            modules_to_save.append('vision_tower')
         lora_config = LoraConfig(
             r=training_args.lora_r,
             lora_alpha=training_args.lora_alpha,
@@ -488,6 +539,7 @@ def main():
             lora_dropout=training_args.lora_dropout,
             bias=training_args.lora_bias,
             task_type="CAUSAL_LM",
+            modules_to_save=modules_to_save
         )
         rank0_print("Adding LoRA adapters only on LLM.")
         model = get_peft_model(model, lora_config)
@@ -560,12 +612,18 @@ def main():
     model.config.use_cache = True
 
     rank0_print("=" * 20 + " Save model " + "=" * 20)
-    if training_args.lora_enable:
-        state_dict_with_lora = model.state_dict()
+    if training_args.lora_enable or training_args.tune_vision_encoder:
+        state_dict_with_lora = model.state_dict()   # Save all parameter into `model_with_lora.bin`
         torch.save(
             state_dict_with_lora,
             os.path.join(training_args.output_dir, "model_with_lora.bin"),
         )
+        state_dict_vision_encoder = model.get_model().vision_tower.state_dict()
+        torch.save(
+            state_dict_vision_encoder,
+            os.path.join(training_args.output_dir, 'newest_vision_tower.bin')
+        )
+        model_args.vision_tower_config.to_json_file(os.path.join(training_args.output_dir, 'vision_tower_config.json'))
     else:
         safe_save_model_for_hf_trainer(
             trainer=trainer, output_dir=training_args.output_dir

@@ -6,14 +6,14 @@ deepspeed src/train/train_vlm.py \
     --vision_tower "dcformer" \
     --model_name_or_path /home/jovyan/workspace/Med3DVLM/models/VLM \
     --model_type vlm_qwen \
-    --pretrain_vision_model ./output/DCFormer_SigLIP/pretrained_ViT.bin \
+    --pretrain_vision_model /home/jovyan/workspace/Med3DVLM/models/dcformer/pretrained_ViT.bin \
     --mm_projector_type "mixer" \
     --tune_mm_mlp_adapter True \
     --lora_enable True \
     --vision_select_layer -2 \
     --data_root ./data \
     --bf16 True \
-    --output_dir ./output/Med3DVLM-Qwen-2.5-7B-LLMLoRA \
+    --output_dir /home/jovyan/workspace/RunOutput/PromptMed3DVLM/Med3DVLM-Qwen-2.5-7B-LLMLoRA \
     --num_train_epochs 5 \
     --per_device_train_batch_size 64 \
     --per_device_eval_batch_size 4 \

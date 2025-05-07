@@ -71,7 +71,7 @@ class ModelArguments:
 
     pretrain_mllm: Optional[str] = field(default=None)
     tune_vision_encoder: bool = field(
-        default=True,
+        default=False,
         metadata={'help': 'Decision vision_tower will be saved or not.'}
     )
 

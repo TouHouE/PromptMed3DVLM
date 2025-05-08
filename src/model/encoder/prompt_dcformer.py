@@ -101,6 +101,9 @@ class DCFormer(nn.Module):
     def forward(self, x):
         return self.model(x)
 
+    @property
+    def channels(self):
+        return self.model.channels
 
 """input: (1, 1, 256, 256, 128) patch_size: [4] * 3
 torch.Size([1, 131072, 64])
@@ -328,6 +331,9 @@ class MaskPromptDCFormer(nn.Module):
             prefix_state[f'model.{org_key}'] = value
         self.dcformer.load_state_dict(prefix_state, **kwargs)
 
+    @property
+    def channels(self):
+        return self.dcformer.channels
 
 HFT.AutoConfig.register('mask_prompt_dcformer', PromptDCFormerConfig)
 HFT.AutoModel.register(PromptDCFormerConfig, MaskPromptDCFormer)

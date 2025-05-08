@@ -486,7 +486,7 @@ class DecompModel(nn.Module):
         )
         # self.vq = VectorQuantize(dim = channels[-1], codebook_size = codebook_size, use_cosine_sim = True)
 
-    def forward(self, video, mask=None, device="cuda"):
+    def forward(self, video, mask=None, device="cuda", **kwargs):
         hidden_states = self.encoder(video)
         # tokens = rearrange(tokens, "b d h w t -> b t h w d")
         # shape = tokens.shape

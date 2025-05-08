@@ -77,6 +77,14 @@ class VLMMetaModel:
             )
             logger.info(f'vision_tower: {model_args.vision_tower}')
             # print(f'vlm_arch.py:: VLMMetaModel-71:: vision_tower: {model_args.vision_tower}')
+            if hasattr(model_args, 'fix_vision_tower_prefix'):
+                new_state_dict = dict()
+                if model_args.fix_vision_tower_prefix:
+                    for key, value in vision_model_weights.items():                        
+                        new_state_dict[key.replace("vision_tower.", "")] = value
+                        # breakpoint()
+                    vision_model_weights = new_state_dict
+
             if model_args.vision_tower in ['mask_prompt_dcformer', 'prompt_dcformer']:
                 if model_args.pretrain_vision_model_status == 'dcformer':
                     self.vision_tower.vision_tower.load_dcformer_state(

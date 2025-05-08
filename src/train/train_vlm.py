@@ -71,7 +71,7 @@ class ModelArguments:
 
     pretrain_mllm: Optional[str] = field(default=None)
     tune_vision_encoder: bool = field(
-        default=True,
+        default=False,
         metadata={'help': 'Decision vision_tower will be saved or not.'}
     )
 
@@ -479,13 +479,13 @@ def main():
     if model_args.vision_tower is not None:
         if "qwen" in model_args.model_type:
             model = VLMQwenForCausalLM.from_pretrained(
-                model_args.model_name_or_path, cache_dir=training_args.cache_dir
+                model_args.model_name_or_path, cache_dir=training_args.cache_dir, trust_remote_code=True
             )
         else:
             raise ValueError(f"Unknown Model Type {model_args.model_type}")
     else:
         model = LlamaForCausalLM.from_pretrained(
-            model_args.model_name_or_path, cache_dir=training_args.cache_dir
+            model_args.model_name_or_path, cache_dir=training_args.cache_dir, trust_remote_code=True
         )
 
     model.config.use_cache = False
@@ -554,7 +554,7 @@ def main():
                 [x in n for x in ["vision_tower", "mm_projector", "embed_tokens", "lm_head"]]
             ):
                 p.requires_grad = True
-
+        
         print_trainable_parameters(model)
         model.print_trainable_parameters()        
     elif is_rank_zero():

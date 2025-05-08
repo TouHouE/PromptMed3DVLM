@@ -12,6 +12,7 @@ from src.model.encoder.dcformer import (
     decomp_tiny,
 )
 from src.model.encoder.vit import Vit3D
+from src.model.encoder.prompt_dcformer import PromptDCFormerConfig, MaskPromptDCFormer
 from src.model.projector.mlp import MultiLayerPerceptron
 
 try:
@@ -73,6 +74,8 @@ class DEC_CLIP(PreTrainedModel):
             )
         elif config.vision_encoder == "dcformer":
             self.vision_encoder = decomp_small(input_size=config.input_size)
+        elif config.vision_encoder in ['mask_prompt_dcformer', 'prompt_dcformer']:
+            self.vision_encoder = MaskPromptDCFormer(PromptDCFormerConfig.small_config(input_size=config.input_size))
         else:
             raise ValueError(f"Unexpected vision encoder: {config.vision_encoder}")
 

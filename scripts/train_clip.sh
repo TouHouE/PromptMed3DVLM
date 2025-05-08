@@ -1,10 +1,12 @@
 #!/bin/bash
-
+HF_HOME=
+export pretrained_model=/home/jovyan/shared/uc207pr4f57t9/cardiac/model/dcformer_vit
 deepspeed src/train/train_clip.py \
     --deepspeed ./scripts/zero2.json \
+    --pretrained_model= pretrained_model \
     --language_model_name_or_path medicalai/ClinicalBERT \
     --wb_name DCFormer_SigLIP \
-    --vision_encoder "dcformer" \
+    --vision_encoder "prompt_dcformer" \
     --loss_type "sigmoid" \
     --data_root ./data \
     --max_length 512 \

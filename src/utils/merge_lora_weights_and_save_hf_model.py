@@ -40,6 +40,7 @@ class ModelArguments:
     depth: int = field(default=12)
 
     # vision
+    fix_vision_tower_prefix: bool = field(default=False)
     vision_tower: Optional[str] = field(default="dcformer")
     vision_select_layer: Optional[int] = field(default=-2)
     vision_select_feature: Optional[str] = field(default="cls_patch")
@@ -184,6 +185,7 @@ def main():
 
     print("Load weights with LoRA")
     state_dict = torch.load(model_args.model_with_lora, map_location="cpu")
+
     model.load_state_dict(state_dict, strict=True)
 
     print("Merge weights with LoRA")

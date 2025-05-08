@@ -5,6 +5,7 @@ import random
 import logging
 from functools import partial
 # logging.basicConfig(level=logging.DEBUG)
+os.makedirs("./log", exist_ok=True)
 logger = logging.getLogger(__name__)
 log_fmt = logging.Formatter(
     '%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s',
@@ -54,7 +55,7 @@ def return_print(data, stage=None):
     return data
 
 class CardiacDataset(Dataset):
-    image_root = '/home/jovyan/workspace/taipei'
+    image_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei'
 
     def __init__(self, args, tokenizer, mode='train'):
         self.args = args
@@ -62,7 +63,7 @@ class CardiacDataset(Dataset):
         self.mode = mode
         self.image_tokens = '<im_patch>' * args.proj_out_num
         self.data_list = list()
-        with open('/home/jovyan/workspace/taipei/taipei_502_vqa.jsonl', 'r') as reader:            
+        with open('/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei/taipei_502_vqa.jsonl', 'r') as reader:            
             for pack in reader.readlines():
                 pack = json.loads(pack)
                 pack['image'] = join(self.image_root, 'to_saturn', pack['image'])

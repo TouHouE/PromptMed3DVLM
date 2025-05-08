@@ -170,7 +170,21 @@ def main():
     if model_args.pretrained_model:
         # ckpt = torch.load(model_args.pretrained_model)
         ckpt = load_file(model_args.pretrained_model)
-        model.load_state_dict(ckpt, strict=True)
+        vit_dict = dict()
+        other_dict = dict()
+        if model_args.vision_encoder in ['prompt_dcformer', 'mask_prompt_dcformer']:
+            for key, value in ckpt.items():
+                if 'vision_encoder' in key:
+                    vit_dict[key.replace("vision_encoder", "vision_encoder.dcformer")] = value
+                else:
+                    other_dict[key] = value
+
+
+        key_in_model, key_in_ckpt = model.load_state_dict(ckpt, strict=False)
+
+
+
+        assert len(key_in_model) == 0, "The ckpt should contains all of parameter for model"
         print("load pretrained model.")
 
     train_dataset = CLIPDataset(data_args, tokenizer, mode="train")
@@ -194,7 +208,11 @@ def main():
 
     if is_rank_zero():
         wandb.login()
-        wandb.init(project="Med3DVLM", name=model_args.wb_name)
+        wandb.init(project="Med3DVLM", name=model_args.wb_name, config={
+            "training": training_args,
+            "model": model_args,
+            "data": data_args
+        })
 
     if os.path.exists(training_args.output_dir):
         checkpoints = sorted(

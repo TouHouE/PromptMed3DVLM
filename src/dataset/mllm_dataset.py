@@ -54,6 +54,24 @@ def return_print(data, stage=None):
 
     return data
 
+
+def load_make_sure_exists(pack):
+    public_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei'
+    possible_mid_path = [
+        'to_saturn',    # for Taipei_502,
+        'to_saturn_yeh',
+        'to_saturn_beato'
+    ]
+    for mid_path in possible_mid_path:
+        if os.path.exists(join(public_root, mid_path, pack['image'])):
+            pack['image'] = join(public_root, mid_path, pack['image'])
+
+            if pack.get('label', None) is not None:
+                pack['label'] = join(public_root, mid_path, pack['label'])
+            return pack
+    return None
+
+
 class CardiacDataset(Dataset):
     image_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei'
 
@@ -63,14 +81,30 @@ class CardiacDataset(Dataset):
         self.mode = mode
         self.image_tokens = '<im_patch>' * args.proj_out_num
         self.data_list = list()
-        with open('/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei/taipei_502_vqa.jsonl', 'r') as reader:            
-            for pack in reader.readlines():
-                pack = json.loads(pack)
-                pack['image'] = join(self.image_root, 'to_saturn', pack['image'])
-                if 'label' in pack:
-                    pack['label'] = join(self.image_root, 'to_saturn', pack['label'])
-                
-                self.data_list.append(pack)
+        with open(f'/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei/gemini_split_{mode}.json', 'r', encoding='utf-8') as reader:
+            all_pack = json.load(reader)
+        for pack in all_pack:
+            abs_pack = load_make_sure_exists(pack)
+            query, answer = abs_pack['conversations']
+            if query['value'] is None or answer['value'] is None:
+                continue
+            if len(query['value'].lower().replace('none', '').replace('<image>', '').strip()) == 0:
+                continue
+            if len(answer['value'].lower().replace('none', '').replace('<image>', '').strip()) == 0:
+                continue
+
+            self.data_list.append(abs_pack)
+
+        # with open('/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei/taipei_502_vqa.jsonl', 'r') as reader:
+        #     for pack in reader.readlines():
+        #         pack = json.loads(pack)
+        #         pack['image'] = join(self.image_root, 'to_saturn', pack['image'])
+        #         if 'label' in pack:
+        #             pack['label'] = join(self.image_root, 'to_saturn', pack['label'])
+        #
+        #         self.data_list.append(pack)
+        # with open('/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei/taipei_2897_yeh_conv.jsonl', 'r') as reader:
+
         self.image_loader = mtf.Compose([
             mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
             mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),

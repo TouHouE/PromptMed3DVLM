@@ -56,35 +56,47 @@ def return_print(data, stage=None):
 
 
 def load_make_sure_exists(pack):
-    public_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei'
+    possible_root = ['/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei', '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei']
+    # public_root = ''/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei''
     possible_mid_path = [
         'to_saturn',    # for Taipei_502,
         'to_saturn_yeh',
         'to_saturn_beato'
     ]
-    for mid_path in possible_mid_path:
-        if os.path.exists(join(public_root, mid_path, pack['image'])):
-            pack['image'] = join(public_root, mid_path, pack['image'])
+    for public_root in possible_root:
+        for mid_path in possible_mid_path:
+            cur_abs_path = join(public_root, mid_path, pack['image'])
+            # print(f'Cur_abs_path: {cur_abs_path}')
+            if os.path.exists(cur_abs_path):
+                pack['image'] = cur_abs_path
 
-            if pack.get('label', None) is not None:
-                pack['label'] = join(public_root, mid_path, pack['label'])
-            return pack
+                if pack.get('label', None) is not None:
+                    pack['label'] = join(public_root, mid_path, pack['label'])
+                return pack
     return None
 
 
 class CardiacDataset(Dataset):
     image_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei'
-
+    public_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei'
     def __init__(self, args, tokenizer, mode='train'):
         self.args = args
         self.tokenizer = tokenizer
         self.mode = mode
         self.image_tokens = '<im_patch>' * args.proj_out_num
         self.data_list = list()
-        with open(f'/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei/gemini_split_{mode}.json', 'r', encoding='utf-8') as reader:
+        with open(join(self.public_root, f'gemini_split_{mode}.json'), 'r', encoding='utf-8') as reader:
             all_pack = json.load(reader)
-        for pack in all_pack:
+        with open(join(self.public_root, f'gemini_split_{mode}_add_phase.json'), 'r', encoding='utf-8') as reader:
+            all_pack.extend(json.load(reader))
+        for idx, pack in enumerate(all_pack):
             abs_pack = load_make_sure_exists(pack)
+            if abs_pack is None:
+                with open('./missing_file.txt', 'a+') as ostream:
+                    ostream.write(f"File: {pack['image']} False\n")
+                # print(f'Pass {idx}')
+                continue
+                
             query, answer = abs_pack['conversations']
             if query['value'] is None or answer['value'] is None:
                 continue

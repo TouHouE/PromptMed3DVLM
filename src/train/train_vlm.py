@@ -571,7 +571,7 @@ def main():
     #     train_dataset = TextYNDatasets(data_args, tokenizer, mode="train")
     train_dataset = CardiacDataset(data_args, tokenizer)
 
-    # eval_dataset = CapDataset(data_args, tokenizer, mode="validation")
+    eval_dataset = CardiacDataset(data_args, tokenizer, mode="val")
     data_collator = DataCollator()
 
     rank0_print("=" * 20 + " Training " + "=" * 20)
@@ -580,7 +580,7 @@ def main():
         args=training_args,
         data_collator=data_collator,
         train_dataset=train_dataset,
-        # eval_dataset=eval_dataset,
+        eval_dataset=eval_dataset,
         compute_metrics=compute_metrics,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     )

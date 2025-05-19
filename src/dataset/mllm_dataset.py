@@ -76,6 +76,43 @@ def load_make_sure_exists(pack):
     return None
 
 
+def get_image_loader(args, mode='train'):
+    if mode == 'train':
+        return mtf.Compose([
+            mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
+            # mtf.Lambda(lambda pack: return_print(pack, 'After Orientation')),
+            mtf.Spacingd(keys=['image', 'label'], pixdim=(.4, .4, -1), mode=('trilinear', 'nearest'),
+                         allow_missing_keys=True),            
+            mtf.ScaleIntensityd(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
+            # mtf.Lambda(lambda pack: return_print(pack, 'After Resize')),
+            # mtf.Lambda(lambda pack: {key: value if value.shape[2] == 256 else value.permute(0, 1, 3, 2) for key, value in pack.items()}),
+            # mtf.Lambda(lambda pack: return_print(pack, 'After Custom permute')),
+            # mtf.Orientationd("SRA"),
+            # Random Shit
+            # mtf.RandRotate90d(prob=0.5, spatial_axes=(1, 2), keys=['image', 'label'], allow_missing_keys=True),
+            mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label'], allow_missing_keys=True),
+            mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label'], allow_missing_keys=True),
+            mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label'], allow_missing_keys=True),
+            mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image', 'label'], allow_missing_keys=True),
+            mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image', 'label'], allow_missing_keys=True),
+            mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True),
+            # mtf.Lambda(lambda pack: return_print(pack, 'After ToTensor'))
+        ])
+
+    return mtf.Compose([
+            mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
+            # mtf.Lambda(lambda pack: return_print(pack, 'After Orientation')),
+            mtf.Spacingd(keys=['image', 'label'], pixdim=(.4, .4, -1), mode=('trilinear', 'nearest'),
+                         allow_missing_keys=True),            
+            mtf.ScaleIntensityd(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
+        ])
+
 class CardiacDataset(Dataset):
     image_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei'
     public_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei'
@@ -117,29 +154,7 @@ class CardiacDataset(Dataset):
         #         self.data_list.append(pack)
         # with open('/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei/taipei_2897_yeh_conv.jsonl', 'r') as reader:
 
-        self.image_loader = mtf.Compose([
-            mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
-            mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
-            mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
-            # mtf.Lambda(lambda pack: return_print(pack, 'After Orientation')),
-            mtf.Spacingd(keys=['image', 'label'], pixdim=(.4, .4, -1), mode=('trilinear', 'nearest'),
-                         allow_missing_keys=True),            
-            mtf.ScaleIntensityd(keys=['image', 'label'], allow_missing_keys=True),
-            mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
-            # mtf.Lambda(lambda pack: return_print(pack, 'After Resize')),
-            # mtf.Lambda(lambda pack: {key: value if value.shape[2] == 256 else value.permute(0, 1, 3, 2) for key, value in pack.items()}),
-            # mtf.Lambda(lambda pack: return_print(pack, 'After Custom permute')),
-            # mtf.Orientationd("SRA"),
-            # Random Shit
-            # mtf.RandRotate90d(prob=0.5, spatial_axes=(1, 2), keys=['image', 'label'], allow_missing_keys=True),
-            mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label'], allow_missing_keys=True),
-            mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label'], allow_missing_keys=True),
-            mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label'], allow_missing_keys=True),
-            mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image', 'label'], allow_missing_keys=True),
-            mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image', 'label'], allow_missing_keys=True),
-            mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True),
-            # mtf.Lambda(lambda pack: return_print(pack, 'After ToTensor'))
-        ])
+        self.image_loader = get_image_loader(args, mode)
 
     def __getitem__(self, idx):
         # print(f'Start Loading {idx}')

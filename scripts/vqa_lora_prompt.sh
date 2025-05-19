@@ -28,6 +28,7 @@ deepspeed src/train/train_vlm.py \
     --save_steps 10 \
     --save_total_limit 2 \
     --learning_rate 5e-5 \
+    --learning_rate 5e-5 \
     --weight_decay 0. \
     --warmup_ratio 0.03 \
     --lr_scheduler_type "cosine" \

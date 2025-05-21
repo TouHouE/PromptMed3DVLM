@@ -29,6 +29,13 @@ from src.dataset.prompt_templates import Caption_templates
 
 PAD_EOS_SWAP_TMP_TOKEN = -100
 
+
+
+def get_prompt():
+    return r"""If the input includes CT scans from at least two distinct cardiac phases, you can proceed with the requested calculation."""
+
+
+
 # A debugging usage method
 def return_print(data, stage=None):
     if stage is not None:
@@ -117,6 +124,12 @@ class CardiacDataset(Dataset):
     image_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei'
     public_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei'
     def __init__(self, args, tokenizer, mode='train'):
+        """
+        The args must contains:
+            1. proj_out_num
+            2. max_length
+        @param args
+        """
         self.args = args
         self.tokenizer = tokenizer
         self.mode = mode
@@ -176,8 +189,22 @@ class CardiacDataset(Dataset):
         question = self.image_tokens + query
 
         logger.info(f'question: {query}, answer: {answer}')
+        if getattr(self.args, 'apply_prompt', False):   # The text format should look like chat mode.
+            convs = [
+                {'role': 'system', 'content': get_prompt()},
+                {'role': 'user', 'content': question}
+            ]
+            if self.mode == 'train':
+                convs.append({'role': 'assistant', 'content': answer})
+            formatted_text = self.tokenizer.apply_chat_template(
+                convs, add_generation_prompt=True,
+                tokenize=False
+            )
+        else:   # Following Original Med3DVLM method.
+            formatted_text = f"{question} {answer}"
+        
         text_tensor = self.tokenizer(
-            question + " " + answer,
+            formatted_text,
             max_length=self.args.max_length,
             truncation=True,
             padding="max_length",
@@ -190,6 +217,7 @@ class CardiacDataset(Dataset):
         if valid_len < len(input_id):
             input_id[valid_len] = self.tokenizer.eos_token_id
 
+        
         question_tensor = self.tokenizer(
             question,
             max_length=self.args.max_length,

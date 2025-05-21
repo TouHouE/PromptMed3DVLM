@@ -38,7 +38,7 @@ class CardiacCLIPDataset(Dataset):
             mtf.LoadImaged(**load_kwargs),
             mtf.EnsureChannelFirstd(**load_kwargs),
             mtf.Orientationd(axcodes='RAS', **load_kwargs),
-            mtf.Spacingd(**load_kwargs, pixdim=(.5, .5, -1), mode=('trilinear', 'nearest')),
+            mtf.Spacingd(**load_kwargs, pixdim=(.39, .39, -1), mode=('trilinear', 'nearest')),
             mtf.ScaleIntensityd(keys=['image']),
             mtf.ResizeWithPadOrCropd(**load_kwargs)
         ])
@@ -205,6 +205,9 @@ class CLIPDataset(Dataset):
         return len(self.data_list)
 
     def truncate_text(self, input_text, max_tokens):
+        """
+            Make sure the number token of input_text is < @param max_tokens
+        """
         def count_tokens(text):
             tokens = self.tokenizer.encode(text, add_special_tokens=True)
             return len(tokens)
@@ -212,7 +215,7 @@ class CLIPDataset(Dataset):
         if count_tokens(input_text) <= max_tokens:
             return input_text
 
-        sentences = input_text.split('.')
+        sentences = input_text.split('.')   # Cut down all of sentence
 
         selected_sentences = []
         current_tokens = 0

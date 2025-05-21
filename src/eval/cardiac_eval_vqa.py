@@ -17,7 +17,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from monai import transforms as mtf
 import accelerate as HFA
 
-from src.dataset.mllm_dataset import VQADataset, load_make_sure_exists
+from src.dataset.mllm_dataset import VQADataset, load_make_sure_exists, CardiacDataset
 from src.model.llm import VLMQwenForCausalLM
 bleu = evaluate.load("bleu")
 bertscore = evaluate.load("bertscore")
@@ -106,7 +106,28 @@ def load_model_tokenizer(args):
     return model, tokenizer
 
 
-def load_test_dataset(args):
+def data_collator(batch):
+    images = torch.stack([pack['image'] for pack in batch])
+    masks = torch.stack([pack['mask'] for pack in batch])
+    input_ids = torch.stack([pack['input_id'] for pack in batch])
+    answers = [pack['answer'] for pack in batch]
+    question = [pack['question'] for pack in batch]
+    image_files = [pack['image_file'] for pack in batch]
+    mask_files = [pack['label_file'] for pack in batch]
+
+    return {
+        'images': images,
+        'masks': masks,
+        'input_ids': input_ids,
+        'answers': answers,
+        'questions': question,
+        'image_files': image_files,
+        'mask_files': mask_files
+    }
+
+
+def load_test_dataset(args, tokenizer):
+    return CardiacDataset(args=args, tokenizer=tokenizer, mode='test')
     with open(args.test_data_path, 'r', encoding='utf-8') as loader:
         if args.test_data_path.endswith('.jsonl'):
             pack_list = [json.loads(line) for line in loader.readlines()]
@@ -137,7 +158,7 @@ def load_test_dataset(args):
         pack['conversations'][1]['value'] = answer
 
         filted_pack.append(pack)
-        
+    
     return filted_pack
 
 def get_image_loader(args):
@@ -240,20 +261,21 @@ def main():
         os.makedirs(args.output_dir)
     model_name = args.model_name_or_path.split("/")[-1]
     
-    all_vqa_pair = load_test_dataset(args)
+    all_vqa_pair = load_test_dataset(args, tokenizer)
     final_group = list()
     for idx, vqa_pack in tqdm(enumerate(all_vqa_pair), total=len(all_vqa_pair)):
-        visual_pack = {'image': vqa_pack['image']}
-        if 'label' in vqa_pack:
-            visual_pack['label'] = vqa_pack['label']
-        try:
-            media_pack = image_loader(visual_pack)
-        except Exception as e:
-            with open('./missing.txt', 'a+') as writer:
-                writer.write(f"="*30)
-                writer.write(f'\n{json.dumps(visual_pack, indent=2)}\n')
-                writer.write(f'{e.args}')
-            continue
+        # visual_pack = {'image': vqa_pack['image']}
+        # if 'label' in vqa_pack:
+        #     visual_pack['label'] = vqa_pack['label']
+        # try:
+        #     media_pack = image_loader(visual_pack)
+        # except Exception as e:
+        #     with open('./missing.txt', 'a+') as writer:
+        #         writer.write(f"="*30)
+        #         writer.write(f'\n{json.dumps(visual_pack, indent=2)}\n')
+        #         writer.write(f'{e.args}')
+        #     continue
+        media_pack = {'images': vqa_pack.pop('images'), 'masks': vqa_pack.pop('masks')}
 
         output_pack = generation(
             model, tokenizer, args, vqa_pack, media_pack

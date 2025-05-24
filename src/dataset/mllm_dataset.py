@@ -246,16 +246,15 @@ class CardiacDataset(Dataset):
         try:
             visual_pack = self.image_loader(loader_pack)
         except Exception as e:
-            return self.__getitem__(idx + 1)
-        # print(f'image.shape:{visual["image"].shape}||{cur_pack["image"]}')
+            if self.mode == 'train':
+                return self.__getitem__(idx + 1)
+            visual_pack = {'image': None, 'label': None}            
+        
 
-        if visual_pack.get('label') is None:            
+        if visual_pack.get('label') is None and visual_pack.get('image') is not None:
             visual_pack['label'] = torch.zeros_like(visual_pack['image'])
-        # print(f'{idx} is Done')
-        # image = self.image_loader(join(self.image_root, cur_pack['image']))
-        
-        
-
+        elif visual_pack.get('label') is None and visual_pack.get('image') is None:
+            visual_pack['label'] = None
         return {
             "image": visual_pack['image'],
             'mask': visual_pack['label'],
@@ -264,7 +263,7 @@ class CardiacDataset(Dataset):
             "attention_mask": attention_mask,
             "question": question,
             "answer": answer,
-            'image_file': cur_pack['image'],
+            'image_file': cur_pack.get('image', 'None'),
             'label_file': cur_pack.get('label', 'None')
         }
 

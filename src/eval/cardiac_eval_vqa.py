@@ -48,10 +48,10 @@ def parse_args(args=None):
         "--model_name_or_path", type=str, default="./models/Med3DVLM-Qwen-2.5-7B"
     )
     parser.add_argument(
-        '--apply_mask', action='store_true', default=False
+        '--apply_mask_prompt', action='store_true', default=False, help="Only enable when PromptEncoder in VLM."
     )
     parser.add_argument(
-        '--apply_prompt', action='store_true', default=False
+        '--apply_system_prompt', action='store_true', default=False, help="This one is enable chat mode, meaning adding <|im_start|>user...<|im_end|>... something like that."
     )
     parser.add_argument('--vision_tower', type=str, default='dcformer')
     parser.add_argument("--max_length", type=int, default=512)
@@ -107,13 +107,20 @@ def load_model_tokenizer(args):
 
 
 def data_collator(batch):
-    images = torch.stack([pack['image'] for pack in batch])
-    masks = torch.stack([pack['mask'] for pack in batch])
-    input_ids = torch.stack([pack['input_id'] for pack in batch])
-    answers = [pack['answer'] for pack in batch]
-    question = [pack['question'] for pack in batch]
-    image_files = [pack['image_file'] for pack in batch]
-    mask_files = [pack['label_file'] for pack in batch]
+    # images, masks, input_ids, answers, question, image_files, mask_files = [] * 7
+
+    # for pack in batch:
+    #     if pack['image'] is None:
+    #         continue
+
+
+    images = torch.stack([pack['image'] for pack in batch if pack['image'] is not None])
+    masks = torch.stack([pack['mask'] for pack in batch if pack['image'] is not None])
+    input_ids = torch.stack([pack['input_id'] for pack in batch if pack['image'] is not None])
+    answers = [pack['answer'] for pack in batch if pack['image'] is not None]
+    question = [pack['question'] for pack in batch if pack['image'] is not None]
+    image_files = [pack['image_file'] for pack in batch if pack['image'] is not None]
+    mask_files = [pack['label_file'] for pack in batch if pack['image'] is not None]
 
     return {
         'images': images,
@@ -175,45 +182,52 @@ def get_image_loader(args):
 
 
 @torch.inference_mode()
-def generation(model, tokenizer, args, pack, media_pack, dtype=torch.bfloat16):    
-    # Start process Vision data
-    media_pack['images'] = media_pack.pop('image')[None].to('cuda', dtype)
+def generation(model, tokenizer, args, pack, dtype=torch.bfloat16):    
+    """
+    pack: {
+        'images': torch.Tensor, 'masks': torch.Tensor, 'input_ids': torch.Tensor,
+        'answers': list[str], 'questions': list[str], 
+        'image_files': list[str], 'mask_files': list[str]
+    }
+    """    
+    media_pack = {'images': pack.pop('images').to('cuda', dtype), 'masks': pack.pop('masks').to('cuda', dtype)}
     vision_encoder_is_promptable = any(keyname in args.vision_tower for keyname in ['mask', 'prompt'])
 
     if not vision_encoder_is_promptable:    # No PromptEncoder module in Vision Encoder, thus this argument should not pass
-        media_pack.pop('label')
+        media_pack.pop('masks')
     
-    if args.apply_mask and vision_encoder_is_promptable:    # Rename the argument name from `label` to `masks`
-        media_pack['masks'] = media_pack.pop('label')[None].to('cuda', dtype)
-    # End process of vision data
     # Start process Text data    
     chat_mode: bool = False
     sys_prompt: str = ""
-    raw_question = pack['conversations'][0]['value']
-    question = IMG_TOKEN * args.proj_out_num + raw_question
+    raw_question = pack['questions']    
 
-    if args.apply_prompt:
-        convs = [
-            {'role': "system", 'content': get_prompt()},
-            {'role': 'user', 'content': question}
-        ]
-        input_id = tokenizer.apply_chat_template(convs, return_tensors='pt', add_generation_prompt=True)
-        chat_mode = True
-    else:
-        input_id = tokenizer(question, return_tensors='pt')['input_ids']
-
-    output_ids = model.generate(                        
-        inputs=input_id.to('cuda'),
+    output_ids = model.generate(                                
+        inputs=pack['input_ids'].to('cuda'),
+        # images=pack['images'].to('cuda', dtype),
+        # masks=pack['masks'].to('cuda', dtype),
         max_new_tokens=args.max_length,
         do_sample=args.temperature > 0,
         top_p=args.top_p,
         temperature=args.temperature,
-        **media_pack        
+        **media_pack
     )
 
     output_text = tokenizer.batch_decode(
         output_ids, skip_special_tokens=True
-    )[0]
+    )
+    output_pack = list()
+    for idx, pred in enumerate(output_text):
+        output_pack.append({
+            'Question': pack['questions'][idx],
+            'Answer': pack['answers'][idx],
+            'Assistant': pred.strip(),
+            'system_prompt': sys_prompt,
+            'chat mode': chat_mode,
+            'image_file': pack['image_files'][idx],
+            'mask_file': pack['mask_files'][idx]
+        })
+    return output_pack
+
     return {
         'Question': raw_question,
         'Answer': pack['conversations'][1]['value'],
@@ -262,25 +276,25 @@ def main():
     model_name = args.model_name_or_path.split("/")[-1]
     
     all_vqa_pair = load_test_dataset(args, tokenizer)
+    if not isinstance(all_vqa_pair, list):
+        all_vqa_pair = DataLoader(all_vqa_pair, 16, collate_fn=data_collator, num_workers=16, pin_memory=True)
     final_group = list()
     for idx, vqa_pack in tqdm(enumerate(all_vqa_pair), total=len(all_vqa_pair)):
-        # visual_pack = {'image': vqa_pack['image']}
-        # if 'label' in vqa_pack:
-        #     visual_pack['label'] = vqa_pack['label']
-        # try:
-        #     media_pack = image_loader(visual_pack)
-        # except Exception as e:
-        #     with open('./missing.txt', 'a+') as writer:
-        #         writer.write(f"="*30)
-        #         writer.write(f'\n{json.dumps(visual_pack, indent=2)}\n')
-        #         writer.write(f'{e.args}')
-        #     continue
-        media_pack = {'images': vqa_pack.pop('images'), 'masks': vqa_pack.pop('masks')}
+        """
+            vqa_pack: {
+                'images': torch.Tensor, 'masks': torch.Tensor, 'input_ids': torch.Tensor,
+                'answers': list[str], 'questions': list[str], 
+                'image_files': list[str], 'mask_files': list[str]
+            }
+        """
 
         output_pack = generation(
-            model, tokenizer, args, vqa_pack, media_pack
+            model, tokenizer, args, vqa_pack
         )
-        final_group.append(output_pack)
+        if isinstance(output_pack, list):
+            final_group.extend(output_pack)
+        else:
+            final_group.append(output_pack)
     with open(join(args.output_dir, 'result.json'), 'w+', encoding='utf-8') as writer:
         json.dump(final_group, writer)
     stats = {

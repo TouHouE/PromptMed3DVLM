@@ -94,17 +94,13 @@ def get_image_loader(args, mode='train'):
                          allow_missing_keys=True),            
             mtf.ScaleIntensityd(keys=['image', 'label'], allow_missing_keys=True),
             mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
-            # mtf.Lambda(lambda pack: return_print(pack, 'After Resize')),
-            # mtf.Lambda(lambda pack: {key: value if value.shape[2] == 256 else value.permute(0, 1, 3, 2) for key, value in pack.items()}),
-            # mtf.Lambda(lambda pack: return_print(pack, 'After Custom permute')),
-            # mtf.Orientationd("SRA"),
             # Random Shit
             # mtf.RandRotate90d(prob=0.5, spatial_axes=(1, 2), keys=['image', 'label'], allow_missing_keys=True),
             mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label'], allow_missing_keys=True),
             mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label'], allow_missing_keys=True),
             mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label'], allow_missing_keys=True),
-            mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image', 'label'], allow_missing_keys=True),
-            mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image', 'label'], allow_missing_keys=True),
+            mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image'], allow_missing_keys=True),
+            mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image'], allow_missing_keys=True),
             mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True),
             # mtf.Lambda(lambda pack: return_print(pack, 'After ToTensor'))
         ])

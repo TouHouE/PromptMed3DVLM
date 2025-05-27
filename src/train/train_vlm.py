@@ -524,11 +524,11 @@ def main():
         for name, param in model.named_parameters():
             if 'vision_tower' in name:
                 param.requires_grad = True
-    if not model_args.freeze_prompt_encoder and model_args.model_type in ['mask_prompt_dcformer', 'prompt_dcformer']:
+    if not model_args.freeze_prompt_encoder and model_args.vision_tower in ['mask_prompt_dcformer', 'prompt_dcformer']:
         for name, param in model.named_parameters():
             if 'prompt_encoder' in name:
                 param.requires_grad = True
-    elif not model_args.freeze_prompt_encoder and model_args.model_type not in ['mask_prompt_dcformer', 'prompt_dcformer']:
+    elif not model_args.freeze_prompt_encoder and model_args.vision_tower not in ['mask_prompt_dcformer', 'prompt_dcformer']:
         rank0_print("Current VisionTower doesn't contains any `prompt_encoder`\nSetting `freeze_prompt_encoder` to `True` is useless.")
 
 
@@ -554,9 +554,9 @@ def main():
                 [x in n for x in ["vision_tower", "mm_projector", "embed_tokens", "lm_head"]]
             ):
                 p.requires_grad = True
-        
-        print_trainable_parameters(model)
-        model.print_trainable_parameters()        
+        if is_rank_zero():
+            print_trainable_parameters(model)
+            model.print_trainable_parameters()        
     elif is_rank_zero():
         print_trainable_parameters(model)
 
@@ -607,7 +607,10 @@ def main():
             last_checkpoint = checkpoints[-1]
             resume_ckpt = os.path.join(training_args.output_dir, last_checkpoint)
             rank0_print(f"Resuming from checkpoint: {resume_ckpt}")
-            trainer.train(resume_from_checkpoint=resume_ckpt)
+            try:
+                trainer.train(resume_from_checkpoint=resume_ckpt)
+            except Exception as E:
+                trainer.train(resume_from_checkpoint='/home/jovyan/shared/uc207pr4f57t9/cardiac/RunOutput/PromptMed3DVLM-Qwen-2.5-7B-LoRA-BaselineDS-5Epoch/checkpoint-1300')
         else:
             trainer.train()
     else:

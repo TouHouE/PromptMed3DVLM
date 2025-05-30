@@ -92,6 +92,7 @@ class VLMQwenForCausalLM(Qwen2ForCausalLM, VLMMetaForCausalLM):
     ) -> Union[GenerateOutput, torch.LongTensor, Any]:
         position_ids = kwargs.pop("position_ids", None)
         attention_mask = kwargs.pop("attention_mask", None)
+        masks = kwargs.pop('masks', None)
         if "inputs_embeds" in kwargs:
             raise NotImplementedError("`inputs_embeds` is not supported")
 
@@ -104,6 +105,7 @@ class VLMQwenForCausalLM(Qwen2ForCausalLM, VLMMetaForCausalLM):
                     None,
                     None,
                     images,
+                    masks=masks
                 )
             )
         else:

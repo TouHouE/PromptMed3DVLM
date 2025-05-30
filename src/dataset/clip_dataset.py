@@ -1,14 +1,37 @@
 import random
 import os
 import json
+from os.path import join
+
 import numpy as np
 import torch
 import monai.transforms as mtf
-
+import SimpleITK as sitk
 from torch.utils.data import Dataset
 from monai.transforms import allow_missing_keys_mode
 from monai.data import set_track_meta, MetaTensor
-import SimpleITK as sitk
+
+
+def load_make_sure_exists(pack):
+    possible_root = ['/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei', '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei']
+    # public_root = ''/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei''
+    possible_mid_path = [
+        'to_saturn',    # for Taipei_502,
+        'to_saturn_yeh',
+        'to_saturn_beato'
+    ]
+    for public_root in possible_root:
+        for mid_path in possible_mid_path:
+            cur_abs_path = join(public_root, mid_path, pack['image'])
+            # print(f'Cur_abs_path: {cur_abs_path}')
+            if os.path.exists(cur_abs_path):
+                pack['image'] = cur_abs_path
+
+                if pack.get('label', None) is not None:
+                    pack['label'] = join(public_root, mid_path, pack['label'])
+                return pack
+    return None
+
 
 
 
@@ -25,21 +48,30 @@ class CardiacCLIPDataset(Dataset):
         self.data_root = args.data_root
         self.tokenizer = tokenizer
         self.mode = mode
-        self.json_file = load_json_list(args.cap_data_path)
-        self.data_list = self.json_file[mode]
+        self.data_list = load_json_list(join(args.data_root, f'caption_{mode}.json'))
+        if getattr(args, 'ignore_split', False):
+            self.data_list.extend(load_json_list(join(args.data_root, f'caption_val.json')))
+            self.data_list.extend(load_json_list(join(args.data_root, f'caption_train.json')))
+
+        # self.json_file = load_json_list(args.cap_data_path)
+        # self.data_list = self.json_file[mode]
         self.contains_mask: bool = contains_mask
         load_kwargs = dict(allow_missing_keys=True)
-        if contains_mask:
-            load_kwargs['keys'] = ['image', 'label']
-        else:
-            load_kwargs['keys'] = ['image']
+        # if contains_mask:
+        load_kwargs['keys'] = ['image', 'label']
+        
+        if args.shape_mode == 'crop':
+            spacing = (.39, .39, .625)
+        elif args.shape_mode == 'resize':
+            spacing = (.78, .78, 1.25)
+
         self.loader = mtf.Compose([
             mtf.LoadImaged(**load_kwargs),
             mtf.EnsureChannelFirstd(**load_kwargs),
             mtf.Orientationd(axcodes='RAS', **load_kwargs),
-            mtf.Spacingd(**load_kwargs, pixdim=(.39, .39, -1), mode=('trilinear', 'nearest')),
+            mtf.Spacingd(**load_kwargs, pixdim=spacing, mode=('trilinear', 'nearest')),
             mtf.ScaleIntensityd(keys=['image']),
-            mtf.ResizeWithPadOrCropd(**load_kwargs)
+            mtf.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), **load_kwargs)
         ])
 
         train_transform = mtf.Compose(
@@ -55,13 +87,8 @@ class CardiacCLIPDataset(Dataset):
             ]
         )
 
-        val_transform = mtf.Compose(
-                [
-                    mtf.ToTensor(dtype=torch.float, **load_kwargs),
-                ]
-            )
-        set_track_meta(False)
-
+        val_transform = mtf.Compose([mtf.ToTensord(dtype=torch.float, **load_kwargs)])
+        
         if mode == 'train':
             self.transform = train_transform
         elif mode == 'validation':
@@ -107,34 +134,23 @@ class CardiacCLIPDataset(Dataset):
         for _ in range(max_attempts):
             try:
                 data = self.data_list[idx]
-                image_path = data["image"]
-                image_abs_path = os.path.join(self.data_root, image_path)
-                visual_pack = {
-                    'image': image_abs_path
-                }
-                if 'label' in data:
-                    label_abs_path = os.path.join(self.data_root, data['label'])
-                    visual_pack['label'] = label_abs_path
+                data = load_make_sure_exists(data)
 
-                # image = np.load(image_abs_path)  # nomalized 0-1, C,D,H,W
-                # image = np.load(img_abs_path)[np.newaxis, ...]  # nomalized
-                # image = sitk.ReadImage(image_abs_path)
-                # image = sitk.GetArrayFromImage(image)
-                # image = np.expand_dims(image, axis=0)
+                if data is None:
+                    return self.__getitem__(random.randint(0, len(self.data_list) - 1))                                
+                visual_pack = {
+                    'image': data['image']
+                }
+                if 'label' in data:                    
+                    visual_pack['label'] = data['label']                
                 image: dict[str, MetaTensor] = self.loader(visual_pack)
                 image = self.transform(image)
 
-
-                text_path = data["text"]
-                text_abs_path = os.path.join(self.data_root, text_path)
-                with open(text_abs_path, 'r') as text_file:
-                    raw_text = text_file.read()
+                raw_text = data["raw_text"]                
                 text = self.truncate_text(raw_text, self.args.max_length)
-
                 text_tensor = self.tokenizer(
                     text, max_length=self.args.max_length, truncation=True, padding="max_length", return_tensors="pt"
                 )
-
                 input_id = text_tensor["input_ids"][0]
                 attention_mask = text_tensor["attention_mask"][0]
 
@@ -189,7 +205,7 @@ class CLIPDataset(Dataset):
                     mtf.ToTensor(dtype=torch.float),
                 ]
             )
-        set_track_meta(False)
+        # set_track_meta(False)
 
         if mode == 'train':
             self.transform = train_transform

@@ -14,10 +14,9 @@ import SimpleITK as sitk
 
 def load_json_list(path: str) -> list[dict]:
     with open(path, 'r') as jin:
-        if path.endswith('.json'):
-            return json.load(jin)
-        elif path.endswith('.jsonl'):
+        if path.endswith('.jsonl'):
             return [json.loads(line.strip('\n')) for line in jin.readlines()]
+        return json.load(jin)
 
 
 class CardiacCLIPDataset(Dataset):

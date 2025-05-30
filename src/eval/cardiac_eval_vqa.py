@@ -16,6 +16,7 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from monai import transforms as mtf
 import accelerate as HFA
+import deepspeed
 
 from src.dataset.mllm_dataset import VQADataset, load_make_sure_exists, CardiacDataset
 from src.model.llm import VLMQwenForCausalLM
@@ -53,6 +54,20 @@ def parse_args(args=None):
     parser.add_argument(
         '--apply_system_prompt', action='store_true', default=False, help="This one is enable chat mode, meaning adding <|im_start|>user...<|im_end|>... something like that."
     )
+    parser.add_argument(
+        '--is_promptsubset', action='store_true', default=False
+    )
+    parser.add_argument(
+        '--ouptut_name', type=str, default='result.json'
+    )
+    parser.add_argument(
+        '--batch_size', type=int, default=1
+    )
+
+    parser.add_argument(
+        '--shape_mode', type=str, default='crop', help="Setting image preprocessing method, only in [`crop`, `resize`] is Keep resolution then CROP, or Resize and then Crop."
+    )
+
     parser.add_argument('--vision_tower', type=str, default='dcformer')
     parser.add_argument("--max_length", type=int, default=512)
     parser.add_argument("--max_new_tokens", type=int, default=256)
@@ -100,10 +115,10 @@ def load_model_tokenizer(args):
         model = VLMQwenForCausalLM.from_pretrained(
             args.model_name_or_path, device_map='auto', trust_remote_code=True, torch_dtype=torch.bfloat16
         )
-    import accelerate as HFA
-    model = Accelerator.prepare(model)
+    ds_engine = deepspeed.init_inference(model, dtype=torch.bfloat16)
+    # model = Accelerator.prepare(model)
     # model = model.to('cuda')
-    return model, tokenizer
+    return ds_engine.module, tokenizer
 
 
 def data_collator(batch):
@@ -121,11 +136,13 @@ def data_collator(batch):
     question = [pack['question'] for pack in batch if pack['image'] is not None]
     image_files = [pack['image_file'] for pack in batch if pack['image'] is not None]
     mask_files = [pack['label_file'] for pack in batch if pack['image'] is not None]
+    attn_masks = [pack['attention_mask'] for pack in batch if pack['image'] is not None]
 
     return {
         'images': images,
         'masks': masks,
         'input_ids': input_ids,
+        'attention_mask': attn_masks,
         'answers': answers,
         'questions': question,
         'image_files': image_files,
@@ -169,14 +186,15 @@ def load_test_dataset(args, tokenizer):
     return filted_pack
 
 def get_image_loader(args):
+    pixdim = (.39, .39, .625) if args.shape_mode == 'crop' else (.78, .78, .625)
     return mtf.Compose([
             mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
             mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
             mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
             # mtf.Lambda(lambda pack: return_print(pack, 'After Orientation')),
-            mtf.Spacingd(keys=['image', 'label'], pixdim=(.4, .4, -1), mode=('trilinear', 'nearest'),
+            mtf.Spacingd(keys=['image', 'label'], pixdim=pixdim, mode=('trilinear', 'nearest'),
                          allow_missing_keys=True),            
-            mtf.ScaleIntensityd(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.ScaleIntensityd(keys=['image'], allow_missing_keys=True),
             mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
         ])
 
@@ -193,7 +211,7 @@ def generation(model, tokenizer, args, pack, dtype=torch.bfloat16):
     media_pack = {'images': pack.pop('images').to('cuda', dtype), 'masks': pack.pop('masks').to('cuda', dtype)}
     vision_encoder_is_promptable = any(keyname in args.vision_tower for keyname in ['mask', 'prompt'])
 
-    if not vision_encoder_is_promptable:    # No PromptEncoder module in Vision Encoder, thus this argument should not pass
+    if not vision_encoder_is_promptable or not args.apply_mask_prompt:    # No PromptEncoder module in Vision Encoder, thus this argument should not pass
         media_pack.pop('masks')
     
     # Start process Text data    
@@ -222,6 +240,7 @@ def generation(model, tokenizer, args, pack, dtype=torch.bfloat16):
             'Answer': pack['answers'][idx],
             'Assistant': pred.strip(),
             'system_prompt': sys_prompt,
+            'mask_prompt': 'masks' in media_pack,
             'chat mode': chat_mode,
             'image_file': pack['image_files'][idx],
             'mask_file': pack['mask_files'][idx]
@@ -277,7 +296,7 @@ def main():
     
     all_vqa_pair = load_test_dataset(args, tokenizer)
     if not isinstance(all_vqa_pair, list):
-        all_vqa_pair = DataLoader(all_vqa_pair, 16, collate_fn=data_collator, num_workers=16, pin_memory=True)
+        all_vqa_pair = DataLoader(all_vqa_pair, args.batch_size, collate_fn=data_collator, num_workers=8, pin_memory=True)
     final_group = list()
     for idx, vqa_pack in tqdm(enumerate(all_vqa_pair), total=len(all_vqa_pair)):
         """
@@ -295,7 +314,7 @@ def main():
             final_group.extend(output_pack)
         else:
             final_group.append(output_pack)
-    with open(join(args.output_dir, 'result.json'), 'w+', encoding='utf-8') as writer:
+    with open(join(args.output_dir, args.output_name), 'w+', encoding='utf-8') as writer:
         json.dump(final_group, writer)
     stats = {
         key: 0 for key in ['bleu', 'rouge1', 'meteor', 'bert_f1', 'bert_pr', 'bert_rec']
@@ -305,11 +324,11 @@ def main():
         score_pack = evaluate_pred(pack)
         pack.update(score_pack)
         for key, value in score_pack.items():
-            stats[key] += value / n_samp
-
-    with open(join(args.output_dir, 'result_with_scores.json'), 'w+', encoding='utf-8') as writer:
+            stats[key] = value / n_samp + stats.get(key, 0)
+    new_oname = args.output_name.replace(".json", "_with_score.json")
+    with open(join(args.output_dir, new_oname), 'w+', encoding='utf-8') as writer:
         json.dump(final_group, writer)    
-
+    print(f'Summary: \n{json.dumps(stats, indent=2)}')
 
 if __name__ == "__main__":
     main()

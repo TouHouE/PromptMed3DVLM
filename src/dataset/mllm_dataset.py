@@ -4,6 +4,7 @@ import json
 import random
 import logging
 from functools import partial
+from typing import Type, Literal
 # logging.basicConfig(level=logging.DEBUG)
 os.makedirs("./log", exist_ok=True)
 logger = logging.getLogger(__name__)
@@ -22,22 +23,43 @@ import numpy as np
 import monai.transforms as mtf
 import SimpleITK as sitk
 import pandas as pd
-from monai.data import set_track_meta
+from monai.data import set_track_meta, MetaTensor
 from torch.utils.data import Dataset, ConcatDataset
 from src.dataset.prompt_templates import Caption_templates
+
+
+# Start Define Custom TypeHint
+UserType = Literal['human', 'user']
+BotType = Literal['gpt', 'assistant']
+RoleType = Literal['system', UserType, BotType]
+MessageKeyType = Literal['role', 'value']
+SpeekType = dict[MessageKeyType, RoleType | str]
+ConversationType = list[SpeekType]
+CardiacDataKey = Literal['image', 'label', 'conversations']
+CardiacData = dict[CardiacDataKey, str | ConversationType]
+TorchCardiacDataKey = Literal['image', 'label', 'input_id', 'attention_mask', 'mask', 'image_file', 'mask_file']
+TorchCardiacData = dict[TorchCardiacDataKey, torch.Tensor | str | MetaTensor]
+# End Define Custom TypeHint
+
 
 
 PAD_EOS_SWAP_TMP_TOKEN = -100
 
 
+def load_jfile(path: str) -> list[dict]:
+    with open(path, 'r', encoding='utf-8') as loader:
+        if path.endswith('.jsonl'):
+            return [json.loads(line.strip('\n')) for line in loader.readlines()]    
+        return json.load(loader)
 
-def get_prompt():
+
+def get_prompt() -> str:
     return r"""If the input includes CT scans from at least two distinct cardiac phases, you can proceed with the requested calculation."""
 
 
 
 # A debugging usage method
-def return_print(data, stage=None):
+def return_print(data, stage=None) -> any:
     if stage is not None:
         print(f'\nStart {stage}')
     if isinstance(data, dict):
@@ -84,18 +106,29 @@ def load_make_sure_exists(pack):
 
 
 def get_image_loader(args, mode='train'):
+    stem = [
+        mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
+        mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
+        mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True)
+    ]
+        
+    if getattr(args, 'shape_mode', 'crop') == 'resize':
+        spacing = (.78, .78, .625)
+    else:
+        spacing = (.39, .39, .625)
+    stem.extend([
+        mtf.Spacingd(
+            keys=['image', 'label'], allow_missing_keys=True, 
+            pixdim=spacing, mode=('trilinear', 'nearest')
+        ),
+        mtf.ScaleIntensityd(keys=['image'], allow_missing_keys=True),
+        mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
+    ])
+
     if mode == 'train':
-        return mtf.Compose([
-            mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
-            mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
-            mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
-            # mtf.Lambda(lambda pack: return_print(pack, 'After Orientation')),
-            mtf.Spacingd(keys=['image', 'label'], pixdim=(.4, .4, -1), mode=('trilinear', 'nearest'),
-                         allow_missing_keys=True),            
-            mtf.ScaleIntensityd(keys=['image', 'label'], allow_missing_keys=True),
-            mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
+        stem.extend([                                             
             # Random Shit
-            # mtf.RandRotate90d(prob=0.5, spatial_axes=(1, 2), keys=['image', 'label'], allow_missing_keys=True),
+            mtf.RandRotate90d(prob=0.5, spatial_axes=(0, 1), keys=['image', 'label'], allow_missing_keys=True),
             mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label'], allow_missing_keys=True),
             mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label'], allow_missing_keys=True),
             mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label'], allow_missing_keys=True),
@@ -104,17 +137,8 @@ def get_image_loader(args, mode='train'):
             mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True),
             # mtf.Lambda(lambda pack: return_print(pack, 'After ToTensor'))
         ])
-
-    return mtf.Compose([
-            mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
-            mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
-            mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
-            # mtf.Lambda(lambda pack: return_print(pack, 'After Orientation')),
-            mtf.Spacingd(keys=['image', 'label'], pixdim=(.4, .4, -1), mode=('trilinear', 'nearest'),
-                         allow_missing_keys=True),            
-            mtf.ScaleIntensityd(keys=['image', 'label'], allow_missing_keys=True),
-            mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
-        ])
+    stem.append(mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True))
+    return mtf.Compose(stem)
 
 class CardiacDataset(Dataset):
     image_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei'
@@ -131,26 +155,37 @@ class CardiacDataset(Dataset):
         self.mode = mode
         self.image_tokens = '<im_patch>' * args.proj_out_num
         self.data_list = list()
-        with open(join(self.public_root, f'gemini_split_{mode}.json'), 'r', encoding='utf-8') as reader:
-            all_pack = json.load(reader)
-        with open(join(self.public_root, f'gemini_split_{mode}_add_phase.json'), 'r', encoding='utf-8') as reader:
-            all_pack.extend(json.load(reader))
-        for idx, pack in enumerate(all_pack):
-            abs_pack = load_make_sure_exists(pack)
+        all_pack = load_jfile(join(self.public_root, f'gemini_split_{mode}.jsonl'))
+        all_pack.extend(load_jfile(join(self.public_root, f'gemini_split_{mode}_add_phase.json')))
+        
+        if getattr(args, 'is_promptsubset', False):
+            print(f'`--is_promptsubset` is set')
+            print(f'That meaning we trying to evaluate the model training on `PromptSubset`')
+            new_path = '/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei/prompt_subset_testset.json'
+            all_pack = load_jfile(join(self.public_root, new_path))
+        no_content_regex = r'(none\n){0,1}<image>(\nnone){0,1}'
+
+        for _, pack in enumerate(all_pack):
+            abs_pack: CardiacData | None = load_make_sure_exists(pack)
             if abs_pack is None:
                 with open('./missing_file.txt', 'a+') as ostream:
                     ostream.write(f"File: {pack['image']} False\n")
                 # print(f'Pass {idx}')
                 continue
-                
-            query, answer = abs_pack['conversations']
-            if query['value'] is None or answer['value'] is None:
-                continue
-            if len(query['value'].lower().replace('none', '').replace('<image>', '').strip()) == 0:
-                continue
-            if len(answer['value'].lower().replace('none', '').replace('<image>', '').strip()) == 0:
-                continue
 
+            query, answer = abs_pack['conversations']
+            q = query['value']
+            a = answer['value']
+
+            if any(value is None for value in [q, a]):
+                continue
+            q = re.sub(no_content_regex, "", q.lower())
+            if len(q.strip()) == 0:
+                continue
+            a = re.sub(no_content_regex, "", a.lower())
+            if len(a.strip()) == 0:
+                continue
+            
             self.data_list.append(abs_pack)
 
         # with open('/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei/taipei_502_vqa.jsonl', 'r') as reader:
@@ -173,20 +208,25 @@ class CardiacDataset(Dataset):
             return self.__getitem__(idx + 1)
         conv = cur_pack['conversations']
         query = list(filter(lambda conv_case: conv_case['from'] == 'human', conv))[0]['value']
-        if re.fullmatch(r'<image>\n.*', query) is not None:
-            replace_key = '<image>\n'
-        else:
-            replace_key = '\n<image>'
-        query = query.replace(replace_key, '')
+        query = re.sub('\n{0,1}<image>\n{0,1}', '', query)
+
         answer = list(filter(lambda conv_case: conv_case['from'] == 'gpt', conv))[0]['value']
         if query is None or answer is None:
-            return self.__getitem__(idx + 1)
+            bypass_pack: TorchCardiacData = self.__getitem__(idx + 1)
+            if self.mode == 'train':
+                return bypass_pack
+            # In test or val mode, we should drop current pack.
+            # but we also cannot return None, because it will cause error.
+            # So we return empty pack. Let `data_collator` handle it.
+            for key in bypass_pack.keys():
+                bypass_pack[key] = None
+            return bypass_pack
 
         question = self.image_tokens + query
 
         logger.info(f'question: {query}, answer: {answer}')
         if getattr(self.args, 'apply_prompt', False):   # The text format should look like chat mode.
-            convs = [
+            convs: ConversationType = [
                 {'role': 'system', 'content': get_prompt()},
                 {'role': 'user', 'content': question}
             ]
@@ -196,7 +236,7 @@ class CardiacDataset(Dataset):
                 convs, add_generation_prompt=True,
                 tokenize=False
             )
-        else:   # Following Original Med3DVLM method.
+        else:   # Following Original Med3DVLM method or maybe M3D?.
             formatted_text = f"{question} {answer}"
         
         text_tensor = self.tokenizer(

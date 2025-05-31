@@ -1,10 +1,10 @@
 #!/bin/bash
 export HF_HOME=/home/jovyan/shared/uc207pr4f57t9/cardiac/huggingface
-export OUTPUT_DIR=/home/jovyan/shared/uc207pr4f57t9/cardiac/RunOutput/Med3DVLM-Qwen-2.5-7B-LLMLoRA-Baseline-5Epoch
+export OUTPUT_DIR=/home/jovyan/shared/uc207pr4f57t9/cardiac/RunOutput/Med3DVLM-Qwen-2.5-7B-LLMLoRA-Baseline-Resize-5Epoch
 
 deepspeed src/train/train_vlm.py \
     --deepspeed ./scripts/zero2.json \
-    --wb_name Med3DVLM-Qwen-2.5-7B-LLMLoRA-Baseline-5Epoch \
+    --wb_name Med3DVLM-Qwen-2.5-7B-LLMLoRA-Baseline-Resize-5Epoch \
     --vision_tower "dcformer" \
     --model_name_or_path MagicXin/Med3DVLM-Qwen-2.5-7B \
     --model_type vlm_qwen \
@@ -13,6 +13,7 @@ deepspeed src/train/train_vlm.py \
     --tune_mm_mlp_adapter True \
     --lora_enable True \
     --vision_select_layer -2 \
+    --shpae_mode resize \
     --data_root ./data \
     --bf16 True \
     --output_dir $OUTPUT_DIR \

@@ -141,6 +141,8 @@ class ModelArguments:
 
 @dataclass
 class DataArguments:
+    shape_mode: str = field(default='crop')
+    is_promptsubset: bool = field(default=False)
     data_root: str = field(
         default="./data/", metadata={"help": "Root directory for all data."}
     )

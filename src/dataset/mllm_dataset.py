@@ -113,7 +113,7 @@ def get_image_loader(args, mode='train'):
     ]
         
     if getattr(args, 'shape_mode', 'crop') == 'resize':
-        spacing = (.78, .78, .625)
+        spacing = (.78, .78, 1.25)
     else:
         spacing = (.39, .39, .625)
     stem.extend([

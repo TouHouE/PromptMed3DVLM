@@ -141,7 +141,8 @@ class ModelArguments:
 
 @dataclass
 class DataArguments:
-    shape_mode: str = field(default='crop')
+    shape_mode: str = field(default='resize')
+    dataset_scale: str = field(default='full', metadata={'help': 'Now can apply "full" and "d10"'})
     is_promptsubset: bool = field(default=False)
     data_root: str = field(
         default="./data/", metadata={"help": "Root directory for all data."}

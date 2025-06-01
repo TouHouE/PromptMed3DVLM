@@ -102,6 +102,8 @@ def load_make_sure_exists(pack):
 
                 if pack.get('label', None) is not None:
                     pack['label'] = join(public_root, mid_path, pack['label'])
+                    if not os.path.exists(pack['label']):
+                        pack.pop('label')
                 return pack
     return None
 

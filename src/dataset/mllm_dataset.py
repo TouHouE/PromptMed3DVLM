@@ -3,6 +3,7 @@ import os
 import json
 import random
 import logging
+import traceback as tb
 from functools import partial
 from typing import Type, Literal
 # logging.basicConfig(level=logging.DEBUG)
@@ -134,8 +135,6 @@ def get_image_loader(args, mode='train'):
             mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label'], allow_missing_keys=True),
             mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image'], allow_missing_keys=True),
             mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image'], allow_missing_keys=True),
-            mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True),
-            # mtf.Lambda(lambda pack: return_print(pack, 'After ToTensor'))
         ])
     stem.append(mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True))
     return mtf.Compose(stem)
@@ -155,22 +154,27 @@ class CardiacDataset(Dataset):
         self.mode = mode
         self.image_tokens = '<im_patch>' * args.proj_out_num
         self.data_list = list()
-        all_pack = load_jfile(join(self.public_root, f'gemini_split_{mode}.jsonl'))
+        all_pack = load_jfile(join(self.public_root, f'gemini_split_{mode}.json'))
         all_pack.extend(load_jfile(join(self.public_root, f'gemini_split_{mode}_add_phase.json')))
         
         if getattr(args, 'is_promptsubset', False):
             print(f'`--is_promptsubset` is set')
             print(f'That meaning we trying to evaluate the model training on `PromptSubset`')
-            new_path = '/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei/prompt_subset_testset.json'
+            new_path = 'prompt_subset_testset.json'
             all_pack = load_jfile(join(self.public_root, new_path))
+        if getattr(args, 'dataset_scale', 'full') == 'd10':
+            d10_name = 'gemini_split_train_1e-1.json'
+            print(f'All training data will decrease 10 scale for `dataset_scale` was set to "d10".')
+            all_pack = load_jfile(join(self.public_root, d10_name))
         no_content_regex = r'(none\n){0,1}<image>(\nnone){0,1}'
-
+        drop_num = 0
         for _, pack in enumerate(all_pack):
             abs_pack: CardiacData | None = load_make_sure_exists(pack)
             if abs_pack is None:
                 with open('./missing_file.txt', 'a+') as ostream:
                     ostream.write(f"File: {pack['image']} False\n")
                 # print(f'Pass {idx}')
+                drop_num += 1
                 continue
 
             query, answer = abs_pack['conversations']
@@ -178,15 +182,19 @@ class CardiacDataset(Dataset):
             a = answer['value']
 
             if any(value is None for value in [q, a]):
+                drop_num += 1
                 continue
             q = re.sub(no_content_regex, "", q.lower())
             if len(q.strip()) == 0:
+                drop_num += 1
                 continue
             a = re.sub(no_content_regex, "", a.lower())
             if len(a.strip()) == 0:
+                drop_num += 1
                 continue
             
             self.data_list.append(abs_pack)
+        print(f'Size of data list: {len(self.data_list)}, Dropped: {drop_num}, Original: {len(all_pack)}')
 
         # with open('/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei/taipei_502_vqa.jsonl', 'r') as reader:
         #     for pack in reader.readlines():
@@ -282,6 +290,9 @@ class CardiacDataset(Dataset):
         try:
             visual_pack = self.image_loader(loader_pack)
         except Exception as e:
+            print(f'Image Loader raise error')
+            tb.print_exc()
+            
             if self.mode == 'train':
                 return self.__getitem__(idx + 1)
             visual_pack = {'image': None, 'label': None}            

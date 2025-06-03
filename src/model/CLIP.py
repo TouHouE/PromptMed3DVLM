@@ -41,6 +41,7 @@ class DEC_CLIPConfig(PretrainedConfig):
         t_prime: float = np.log(1 / 0.07),
         bias: float = 0.0,
         efficient_loss: bool = False,
+        vision_encoder: str = "dcformer",
         **kwargs,
     ):
         self.language_model_name_or_path = language_model_name_or_path
@@ -55,6 +56,7 @@ class DEC_CLIPConfig(PretrainedConfig):
         self.t_prime = t_prime
         self.bias = bias
         self.efficient_loss = efficient_loss
+        self.vision_encoder = vision_encoder
         super().__init__(**kwargs)
 
 

@@ -10,7 +10,7 @@ from trainer import CLIPTrainer
 from transformers import AutoTokenizer
 
 import wandb
-from src.dataset.clip_dataset import CLIPDataset
+from src.dataset.clip_dataset import CLIPDataset, CardiacCLIPDataset
 from src.model.CLIP import DEC_CLIP, DEC_CLIPConfig
 
 
@@ -74,6 +74,7 @@ class DataArguments:
         default="./data/M3D_Cap_npy/M3D_Cap.json",
         metadata={"help": "Path to caption data."},
     )
+    shape_mode: str = field(default='crop')
     max_length: int = field(default=512)
 
 
@@ -172,23 +173,26 @@ def main():
         ckpt = load_file(model_args.pretrained_model)
         vit_dict = dict()
         other_dict = dict()
+        key_not_in_model, key_not_in_ckpt = model.load_state_dict(ckpt, strict=False)
+
         if model_args.vision_encoder in ['prompt_dcformer', 'mask_prompt_dcformer']:
             for key, value in ckpt.items():
                 if 'vision_encoder' in key:
-                    vit_dict[key.replace("vision_encoder", "vision_encoder.dcformer")] = value
+                    vit_dict[key.replace("vision_encoder.", "")] = value
                 else:
                     other_dict[key] = value
+            model.vision_encoder.load_dcformer_state(vit_dict)
+        
+        # key_in_model, key_in_ckpt = model.load_state_dict(ckpt, strict=False)
 
 
-        key_in_model, key_in_ckpt = model.load_state_dict(ckpt, strict=False)
 
-
-
-        assert len(key_in_model) == 0, "The ckpt should contains all of parameter for model"
+        # assert len(key_in_model) == 0, "The ckpt should contains all of parameter for model"
         print("load pretrained model.")
-
-    train_dataset = CLIPDataset(data_args, tokenizer, mode="train")
-    eval_dataset = CLIPDataset(data_args, tokenizer, mode="validation")
+    train_dataset = CardiacCLIPDataset(data_args, tokenizer, mode='train')
+    eval_dataset = CardiacCLIPDataset(data_args, tokenizer, mode='val')
+    # train_dataset = CLIPDataset(data_args, tokenizer, mode="train")
+    # eval_dataset = CLIPDataset(data_args, tokenizer, mode="validation")
 
     if model_args.gather_loss and not model_args.local_loss:
         gather_all = True

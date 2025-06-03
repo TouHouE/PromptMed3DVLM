@@ -114,7 +114,7 @@ def get_image_loader(args, mode='train'):
         mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
         mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True)
     ]
-        
+    
     if getattr(args, 'shape_mode', 'crop') == 'resize':
         spacing = (.78, .78, 1.25)
     else:
@@ -139,6 +139,29 @@ def get_image_loader(args, mode='train'):
             mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image'], allow_missing_keys=True),
         ])
     stem.append(mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True))
+
+    if args.do_jpeg:
+        def _slicewise_range(_pack, method):
+            z = _pack['image'].shape[-1]
+            _pack['image'] = torch.stack([method(_pack['image'][..., idx]) for idx in range(z)], dim=-1)
+            return _pack
+        return {
+            'my': mtf.Compose(stem),
+            'jpeg': mtf.Compose([
+            mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cuda', data_type='tensor'),
+            mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
+            mtf.Lambda(lambda _pack: _slicewise_range(_pack, mtf.ScaleIntensity(0, 255, np.int32))),
+            mtf.Spacingd(keys=['image', 'label'], pixdim=spacing, mode=('trilinear', 'nearest'),
+                         allow_missing_keys=True),            
+            mtf.ScaleIntensityd(keys=['image'], allow_missing_keys=True),
+            mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
+            mtf.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cpu', data_type='tensor'),
+            mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True)
+        ])
+        }
+    
     return mtf.Compose(stem)
 
 class CardiacDataset(Dataset):
@@ -207,10 +230,29 @@ class CardiacDataset(Dataset):
         #
         #         self.data_list.append(pack)
         # with open('/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei/taipei_2897_yeh_conv.jsonl', 'r') as reader:
+        # if args.do_jpeg:
+        loader_pack = get_image_loader(args, mode)
+        
+        # self.image_loader = get_image_loader(args, mode)
+        if args.do_jpeg:
+            self.jpeg_loader = loader_pack['jpeg']
+            self.image_loader = loader_pack['my']
+            uni_pid = list(set(_pack['pid'] for _pack in self.data_list))[:args.test_size]
+            self.data_list = list(filter(lambda _pack: _pack['pid'] in uni_pid, self.data_list))                        
+        else:
+            self.image_loader = loader_pack
 
-        self.image_loader = get_image_loader(args, mode)
+    def load_visual_pack(self, loader_pack, loader):        
+        visual_pack = loader(loader_pack)        
+        if visual_pack.get('label') is None and visual_pack.get('image') is not None:
+            visual_pack['label'] = torch.zeros_like(visual_pack['image'])
+        elif visual_pack.get('label') is None and visual_pack.get('image') is None:
+            visual_pack['label'] = None
+        return visual_pack
 
     def __getitem__(self, idx):
+        if self.args.do_jpeg:
+            print(f'Load at-{idx}')
         # print(f'Start Loading {idx}')
         cur_pack = self.data_list[idx]
         # cur_pack = check_image_and_download(cur_pack)
@@ -289,22 +331,8 @@ class CardiacDataset(Dataset):
         if cur_pack.get('label') is not None:
             loader_pack['label'] = cur_pack['label']
         logging.debug(f'Apply to loader:\n{json.dumps(loader_pack, indent=2)}')
-        try:
-            visual_pack = self.image_loader(loader_pack)
-        except Exception as e:
-            print(f'Image Loader raise error')
-            tb.print_exc()
-            
-            if self.mode == 'train':
-                return self.__getitem__(idx + 1)
-            visual_pack = {'image': None, 'label': None}            
-        
-
-        if visual_pack.get('label') is None and visual_pack.get('image') is not None:
-            visual_pack['label'] = torch.zeros_like(visual_pack['image'])
-        elif visual_pack.get('label') is None and visual_pack.get('image') is None:
-            visual_pack['label'] = None
-        return {
+        visual_pack = self.load_visual_pack(loader_pack, self.image_loader)
+        output_pack = {
             "image": visual_pack['image'],
             'mask': visual_pack['label'],
             "input_id": input_id,
@@ -315,6 +343,28 @@ class CardiacDataset(Dataset):
             'image_file': cur_pack.get('image', 'None'),
             'label_file': cur_pack.get('label', 'None')
         }
+
+        
+        if hasattr(self, 'jpeg_loader'):
+            jpeg_pack = self.load_visual_pack(loader_pack, self.jpeg_loader)
+            output_pack['jpeg_image'] = jpeg_pack['image']
+            
+        # try:
+        #     visual_pack = self.image_loader(loader_pack)
+        # except Exception as e:
+        #     print(f'Image Loader raise error')
+        #     tb.print_exc()
+            
+        #     if self.mode == 'train':
+        #         return self.__getitem__(idx + 1)
+        #     visual_pack = {'image': None, 'label': None}            
+        
+
+        # if visual_pack.get('label') is None and visual_pack.get('image') is not None:
+        #     visual_pack['label'] = torch.zeros_like(visual_pack['image'])
+        # elif visual_pack.get('label') is None and visual_pack.get('image') is None:
+        #     visual_pack['label'] = None
+        return output_pack
 
     def __len__(self):
         return len(self.data_list)

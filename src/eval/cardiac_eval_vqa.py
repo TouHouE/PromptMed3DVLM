@@ -58,16 +58,21 @@ def parse_args(args=None):
         '--is_promptsubset', action='store_true', default=False
     )
     parser.add_argument(
-        '--ouptut_name', type=str, default='result.json'
+        '--output_name', type=str, default='result.json'
     )
     parser.add_argument(
         '--batch_size', type=int, default=1
+    )
+    parser.add_argument(
+        '--worker', type=int, default=0
     )
 
     parser.add_argument(
         '--shape_mode', type=str, default='crop', help="Setting image preprocessing method, only in [`crop`, `resize`] is Keep resolution then CROP, or Resize and then Crop."
     )
-
+    parser.add_argument('--test_size', type=int, default=-1)
+    parser.add_argument('--do_jpeg', action='store_true', default=False)
+    
     parser.add_argument('--vision_tower', type=str, default='dcformer')
     parser.add_argument("--max_length", type=int, default=512)
     parser.add_argument("--max_new_tokens", type=int, default=256)
@@ -89,8 +94,11 @@ def parse_args(args=None):
     )
 
     parser.add_argument("--proj_out_num", type=int, default=256)
-
-    return parser.parse_args(args)
+    args = parser.parse_args(args)
+    if getattr(args, 'do_jpeg', False):
+        args.is_exp = True
+    return args
+    # return parser.parse_args(args)
 
 
 def postprocess_text(preds, labels):
@@ -127,7 +135,7 @@ def data_collator(batch):
     # for pack in batch:
     #     if pack['image'] is None:
     #         continue
-
+    
 
     images = torch.stack([pack['image'] for pack in batch if pack['image'] is not None])
     masks = torch.stack([pack['mask'] for pack in batch if pack['image'] is not None])
@@ -137,8 +145,7 @@ def data_collator(batch):
     image_files = [pack['image_file'] for pack in batch if pack['image'] is not None]
     mask_files = [pack['label_file'] for pack in batch if pack['image'] is not None]
     attn_masks = [pack['attention_mask'] for pack in batch if pack['image'] is not None]
-
-    return {
+    output_pack = {
         'images': images,
         'masks': masks,
         'input_ids': input_ids,
@@ -148,10 +155,16 @@ def data_collator(batch):
         'image_files': image_files,
         'mask_files': mask_files
     }
+    if 'jpeg_image' in batch[0]:
+        output_pack['jpeg_image'] = torch.stack([pack['jpeg_image'] for pack in batch if pack['image'] is not None])
+    
+    return output_pack
 
 
 def load_test_dataset(args, tokenizer):
+    # if not getattr(args, 'do_exp', False):
     return CardiacDataset(args=args, tokenizer=tokenizer, mode='test')
+        
     with open(args.test_data_path, 'r', encoding='utf-8') as loader:
         if args.test_data_path.endswith('.jsonl'):
             pack_list = [json.loads(line) for line in loader.readlines()]
@@ -160,6 +173,8 @@ def load_test_dataset(args, tokenizer):
     with open(args.test_data_path.replace('.json', '_add_phase.json'), 'r', encoding='utf-8') as loader:
         pack_list.extend(json.load(loader))
 
+    
+    
     filted_pack = list()
     for pack in pack_list:
         pack = load_make_sure_exists(pack)
@@ -182,12 +197,35 @@ def load_test_dataset(args, tokenizer):
         pack['conversations'][1]['value'] = answer
 
         filted_pack.append(pack)
-    
+    size = getattr(args, 'test_size', -1)
+    if size < 0 or size >= len(sub_filted_pack):
+        return sub_filted_pack
+    # sub_filted_pack = sub_filted_pack[:getattr(args, 'test_size', -1)]
+    pid_list = set(_pack['pid'] for _pack in filted_pack)
+    pid_select = pid_list[:size]
+    filted_pack = list(filter(lambda _pack: _pack['pid'] in pid_select, filted_pack))
+    print(f'Final Size: {len(filted_pack)}, # of Patient: {len(pid_select)}')
+
     return filted_pack
 
 def get_image_loader(args):
+    def _slicewise_range(_pack, method):
+        return np.stack([method(_pack['image'][..., idx]) for idx in range(_pack['image'].shape[-1])], axis=-1)
     pixdim = (.39, .39, .625) if args.shape_mode == 'crop' else (.78, .78, .625)
-    return mtf.Compose([
+    loader_pack = dict()
+    if args.do_jpeg:
+        loader_pack['jpeg'] = mtf.Compose([
+            mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
+            mtf.Lambda(lambda _pack: _slicewise_range(_pack, mtf.ScaleIntensity(0, 255, np.int32))),
+            mtf.Spacingd(keys=['image', 'label'], pixdim=pixdim, mode=('trilinear', 'nearest'),
+                         allow_missing_keys=True),            
+            mtf.ScaleIntensityd(keys=['image'], allow_missing_keys=True),
+            mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
+        ])
+            
+    loader_pack['my'] = mtf.Compose([
             mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
             mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
             mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
@@ -197,6 +235,7 @@ def get_image_loader(args):
             mtf.ScaleIntensityd(keys=['image'], allow_missing_keys=True),
             mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
         ])
+    return loader_pack
 
 
 @torch.inference_mode()
@@ -209,6 +248,12 @@ def generation(model, tokenizer, args, pack, dtype=torch.bfloat16):
     }
     """    
     media_pack = {'images': pack.pop('images').to('cuda', dtype), 'masks': pack.pop('masks').to('cuda', dtype)}
+    second_pack = None
+    if 'jpeg_image' in pack:
+        second_pack = {
+            'images': pack.pop('jpeg_image').to('cuda', dtype)
+        }
+        
     vision_encoder_is_promptable = any(keyname in args.vision_tower for keyname in ['mask', 'prompt'])
 
     if not vision_encoder_is_promptable or not args.apply_mask_prompt:    # No PromptEncoder module in Vision Encoder, thus this argument should not pass
@@ -228,14 +273,28 @@ def generation(model, tokenizer, args, pack, dtype=torch.bfloat16):
         top_p=args.top_p,
         temperature=args.temperature,
         **media_pack
-    )
-
+    )            
     output_text = tokenizer.batch_decode(
         output_ids, skip_special_tokens=True
     )
+    jpeg_text = [None] * len(output_text)
+    if second_pack is not None:
+        output_ids_jpeg = model.generate(                                
+            inputs=pack['input_ids'].to('cuda'),
+            # images=pack['images'].to('cuda', dtype),
+            # masks=pack['masks'].to('cuda', dtype),
+            max_new_tokens=args.max_length,
+            do_sample=args.temperature > 0,
+            top_p=args.top_p,
+            temperature=args.temperature,
+            **second_pack
+        )   
+        jpeg_text = tokenizer.batch_decode(output_ids_jpeg, skip_special_tokens=True)
+    
+    
     output_pack = list()
-    for idx, pred in enumerate(output_text):
-        output_pack.append({
+    for idx, (pred, jpeg_pred) in enumerate(zip(output_text, jpeg_text)):
+        store_pack = {
             'Question': pack['questions'][idx],
             'Answer': pack['answers'][idx],
             'Assistant': pred.strip(),
@@ -244,7 +303,10 @@ def generation(model, tokenizer, args, pack, dtype=torch.bfloat16):
             'chat mode': chat_mode,
             'image_file': pack['image_files'][idx],
             'mask_file': pack['mask_files'][idx]
-        })
+        }
+        if jpeg_pred is not None:
+            store_pack['JPEG_Assistant'] = jpeg_pred
+        output_pack.append(store_pack)
     return output_pack
 
     return {
@@ -292,11 +354,20 @@ def main():
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
+    _TMP_CRASH = os.path.join(args.output_dir, 'CRASH_TMP.json')
+    CRASH_LIST = list()
+    if os.path.exists(_TMP_CRASH):
+        with open(_TMP_CRASH, 'r') as reader:
+            CRASH_LIST = json.load(reader)
+    CRASH_LIST_LEN = len(CRASH_LIST)
+    CRASH_QUESTION = [crash_pack['Question'] for crash_pack in CRASH_LIST]
     model_name = args.model_name_or_path.split("/")[-1]
     
     all_vqa_pair = load_test_dataset(args, tokenizer)
     if not isinstance(all_vqa_pair, list):
-        all_vqa_pair = DataLoader(all_vqa_pair, args.batch_size, collate_fn=data_collator, num_workers=8, pin_memory=True)
+        all_vqa_pair = DataLoader(all_vqa_pair, args.batch_size, collate_fn=data_collator, num_workers=args.worker, pin_memory=False)
+    
+    
     final_group = list()
     for idx, vqa_pack in tqdm(enumerate(all_vqa_pair), total=len(all_vqa_pair)):
         """
@@ -306,14 +377,25 @@ def main():
                 'image_files': list[str], 'mask_files': list[str]
             }
         """
-
-        output_pack = generation(
-            model, tokenizer, args, vqa_pack
-        )
+            
+        
+        if len(set(CRASH_QUESTION) - set(vqa_pack['questions'])) != CRASH_LIST_LEN:
+            
+            continue
+        
+        try:
+            output_pack = generation(
+                model, tokenizer, args, vqa_pack
+            )
+        except Exception as e:
+            with open(join(args.output_dir, 'CRASH_TMP.json'), 'w+', encoding='utf-8') as writer:
+                json.dump(final_group, writer, indent=2)
+            breakpoint()
         if isinstance(output_pack, list):
             final_group.extend(output_pack)
         else:
             final_group.append(output_pack)
+    final_group.extend(CRASH_LIST)
     with open(join(args.output_dir, args.output_name), 'w+', encoding='utf-8') as writer:
         json.dump(final_group, writer)
     stats = {
@@ -331,4 +413,5 @@ def main():
     print(f'Summary: \n{json.dumps(stats, indent=2)}')
 
 if __name__ == "__main__":
+    # torch.multiprocessing.set_start_method('spawn')
     main()

@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
-from src.dataset.clip_dataset import CLIPDataset, CardiacCLIPDataset
+from src.dataset.clip_dataset import CLIPDataset, CardiacCLIPDataset, EXPCardiacCLIPDataset
 from src.model.CLIP import *
 
 
@@ -31,7 +31,9 @@ def parse_args(args=None):
     parser.add_argument(
         '--ignore_split', action='store_true', default=False
     )
-    
+    parser.add_argument(
+        '--is_exp', action='store_true', default=False
+    )
     parser.add_argument(
         "--model_name_or_path", type=str, default="./models/Med3DVLM-DCFormer-SigLIP"
     )
@@ -104,6 +106,7 @@ def calculate_accuracy(similarity_matrix, k):
 def main():
     seed_everything(42)
     args = parse_args()
+    print(args)
     device = torch.device(args.device)
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -118,9 +121,14 @@ def main():
     results = {}
 
     for test_size in args.test_size:
-        test_dataset = CardiacCLIPDataset(
-            args, tokenizer=tokenizer, mode="test", test_size=test_size
-        )
+        if args.is_exp:
+            test_dataset = EXPCardiacCLIPDataset(
+                args, tokenizer=tokenizer, mode='test', test_size=test_size
+            )
+        else:
+            test_dataset = CardiacCLIPDataset(
+                args, tokenizer=tokenizer, mode="test", test_size=test_size
+            )
 
         test_dataloader = DataLoader(
             test_dataset,
@@ -195,7 +203,7 @@ def main():
             writer = csv.writer(outfile)
             for key, value in results.items():
                 writer.writerow([key, f"{value.item():.4f}"])
-        print("Save eval results successfully!")
+        print(f"Save eval results successfully! at: {output_path}")
 
 
 if __name__ == "__main__":

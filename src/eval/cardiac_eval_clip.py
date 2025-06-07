@@ -62,7 +62,7 @@ def parse_args(args=None):
     return parser.parse_args(args)
 
 
-def calculate_recall(similarity_matrix, k):
+def calculate_recall(similarity_matrix, k, data_pool=None):
     _, topk_indices = similarity_matrix.topk(k, dim=1)
     diagonal_indices = torch.arange(similarity_matrix.size(0)).to(
         similarity_matrix.device
@@ -72,7 +72,8 @@ def calculate_recall(similarity_matrix, k):
     return recall_at_k
 
 
-def calculate_precision(similarity_matrix, k):
+
+def calculate_precision(similarity_matrix, k, data_pool=None):
     _, topk_indices = similarity_matrix.topk(k, dim=1)
     diagonal_indices = torch.arange(similarity_matrix.size(0)).to(
         similarity_matrix.device
@@ -93,13 +94,14 @@ def calculate_f1_score(similarity_matrix, k):
     return f1_score
 
 
-def calculate_accuracy(similarity_matrix, k):
+def calculate_accuracy(similarity_matrix, k, data_pool=None):
     _, topk_indices = similarity_matrix.topk(k, dim=1)
     diagonal_indices = torch.arange(similarity_matrix.size(0)).to(
         similarity_matrix.device
     )
     correct_matches = torch.eq(topk_indices, diagonal_indices.view(-1, 1)).any(dim=1)
-    accuracy = correct_matches.float().mean()
+    accuracy = correct_matches.float().mean()    
+    
     return accuracy
 
 
@@ -115,7 +117,10 @@ def main():
         padding_side="right",
         use_fast=False,
     )
+    # try:
     model = AutoModel.from_pretrained(args.model_name_or_path, trust_remote_code=True)
+    # except Exception as e:
+    #     model = DEC_CLIP(DEC_CLIPConfig.from     
     model = model.to(device=device)
 
     results = {}

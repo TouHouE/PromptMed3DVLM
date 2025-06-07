@@ -159,7 +159,10 @@ class CardiacCLIPDataset(Dataset):
                 data = load_make_sure_exists(data)
 
                 if data is None:
-                    return self.__getitem__(random.randint(0, len(self.data_list) - 1))                                
+                    buf_pack = self.__getitem__(random.randint(0, len(self.data_list) - 1))
+                    if self.mode != 'train':
+                        buf_pack['image'] = None                    
+                    return buf_pack
                 visual_pack = {
                     'image': data['image']
                 }

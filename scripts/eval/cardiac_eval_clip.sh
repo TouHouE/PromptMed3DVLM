@@ -1,6 +1,7 @@
 #!/bin/bash
-export model_name=/home/jovyan/shared/uc207pr4f57t9/cardiac/RunOutput/SigLIP/debug
-export output_dir=/home/jovyan/shared/uc207pr4f57t9/cardiac/RunOutput/eval/SigLIP/DCFormerSigLIP_FineTune_E100
+export HF_HOME=/home/jovyan/shared/uc207pr4f57t9/cardiac/huggingface
+export model_name=/home/jovyan/shared/uc207pr4f57t9/cardiac/RunOutput/SigLIP/CardiacSigLIP_noPrompt_nnunet_E500
+export output_dir=/home/jovyan/shared/uc207pr4f57t9/cardiac/RunOutput/eval/SigLIP/CardiacSigLIP_noPrompt_nnunet_E500
 export data_root=/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei
 python src/eval/cardiac_eval_clip.py \
     --model_name_or_path $model_name \

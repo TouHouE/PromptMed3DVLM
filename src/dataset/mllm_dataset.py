@@ -107,27 +107,41 @@ def load_make_sure_exists(pack):
                 return pack
     return None
 
+def nnunet_scale(pack):
+    np.clip(pack['image'], -395.0, 842.0, out=pack['image'])
+    pack['image'] -= 279.8117370605469
+    pack['image'] /= 253.5583953857422
+    return pack
+
 
 def get_image_loader(args, mode='train'):
-    stem = [
-        mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
-        mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
-        mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True)
-    ]
+    axes_code: str = getattr(args, 'axes_code', 'RAS')
+    final_shape: tuple[int] = getattr(args, 'input_size', (256, 256, 128))
     
     if getattr(args, 'shape_mode', 'crop') == 'resize':
         spacing = (.78, .78, 1.25)
     else:
         spacing = (.39, .39, .625)
+    print(f'Preprocessor Info: \n - Axes Code: {axes_code}\n - Shape: {final_shape}\n - Assumption Resolution: {spacing}')
+    stem = [
+        mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
+        mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),        
+        mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True)
+    ]
+    
+    
     stem.extend([
         mtf.Spacingd(
             keys=['image', 'label'], allow_missing_keys=True, 
             pixdim=spacing, mode=('trilinear', 'nearest')
         ),
-        mtf.ScaleIntensityd(keys=['image'], allow_missing_keys=True),
-        mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
+        mtf.Orientationd(keys=['image', 'label'], axcodes=axes_code, allow_missing_keys=True),
+        mtf.Lambda(lambda pack: nnunet_scale(pack)),        
+        mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=final_shape, allow_missing_keys=True),
     ])
-
+    
+    
+    
     if mode == 'train':
         stem.extend([                                             
             # Random Shit
@@ -138,26 +152,36 @@ def get_image_loader(args, mode='train'):
             mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image'], allow_missing_keys=True),
             mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image'], allow_missing_keys=True),
         ])
+    
+    if sum(isinstance(_proc, mtf.EnsureTyped) for _proc in stem) % 2 == 1:
+        stem.append(mtf.EnsureTyped(device='cpu', keys=['image', 'label'], allow_missing_keys=True))
+        print(f'Make sure all of tensor will back to CPU')
     stem.append(mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True))
-
-    if args.do_jpeg:
-        def _slicewise_range(_pack, method):
+    
+    if getattr(args, "do_jpeg", False):
+        def _slicewise_range(_pack: dict[str, torch.Tensor | np.ndarray], method: callable) -> dict[str, torch.Tensor | np.ndarray]:
             z = _pack['image'].shape[-1]
-            _pack['image'] = torch.stack([method(_pack['image'][..., idx]) for idx in range(z)], dim=-1)
+            cand_image = [method(_pack['image'][..., idx]) for idx in range(z)]               
+            stacker = partial(np.stack, axis=-1)
+                              
+            if torch.is_tensor(_pack['image']):
+                stacker = partial(torch.stack, dim=-1)                                
+            _pack['image'] = stacker(cand_image)
             return _pack
         return {
             'my': mtf.Compose(stem),
             'jpeg': mtf.Compose([
             mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
-            mtf.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cuda', data_type='tensor'),
+            # mtf.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cuda', data_type='tensor'),
             mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
             mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
             mtf.Lambda(lambda _pack: _slicewise_range(_pack, mtf.ScaleIntensity(0, 255, np.int32))),
             mtf.Spacingd(keys=['image', 'label'], pixdim=spacing, mode=('trilinear', 'nearest'),
                          allow_missing_keys=True),            
-            mtf.ScaleIntensityd(keys=['image'], allow_missing_keys=True),
-            mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=(256, 256, 128), allow_missing_keys=True),
-            mtf.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cpu', data_type='tensor'),
+            mtf.Orientationd(keys=['image', 'label'], axcodes=axes_code, allow_missing_keys=True),
+            mtf.ScaleIntensityd(keys=['image'], allow_missing_keys=True),                
+            mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=final_shape, allow_missing_keys=True),
+            # mtf.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cpu', data_type='tensor'),
             mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True)
         ])
         }
@@ -234,7 +258,7 @@ class CardiacDataset(Dataset):
         loader_pack = get_image_loader(args, mode)
         
         # self.image_loader = get_image_loader(args, mode)
-        if args.do_jpeg:
+        if getattr(args, "do_jpeg", False):
             self.jpeg_loader = loader_pack['jpeg']
             self.image_loader = loader_pack['my']
             uni_pid = list(set(_pack['pid'] for _pack in self.data_list))[:args.test_size]
@@ -251,7 +275,7 @@ class CardiacDataset(Dataset):
         return visual_pack
 
     def __getitem__(self, idx):
-        if self.args.do_jpeg:
+        if getattr(self, "args.do_jpeg", False):
             print(f'Load at-{idx}')
         # print(f'Start Loading {idx}')
         cur_pack = self.data_list[idx]

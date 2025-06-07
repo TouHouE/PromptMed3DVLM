@@ -70,6 +70,8 @@ class ModelArguments:
     freeze_prompt_encoder: bool = field(default=False)  # For my custom module.
 
     pretrain_mllm: Optional[str] = field(default=None)
+    pretrain_mllm_with_lora: Optional[str] = field(default=None)
+    
     tune_vision_encoder: bool = field(
         default=False,
         metadata={'help': 'Decision vision_tower will be saved or not.'}
@@ -83,7 +85,7 @@ class ModelArguments:
         default=None,
         metadata={"help": "Path to pretrained mm_projector and embed_tokens."},
     )
-
+    
     # image
     input_size: tuple = field(default=(256, 256, 128))
     patch_size: int = field(default=(16, 16, 16))
@@ -551,18 +553,28 @@ def main():
         )
         rank0_print("Adding LoRA adapters only on LLM.")
         model = get_peft_model(model, lora_config)
-
+        unfreeze_module = ["mm_projector", "embed_tokens", "lm_head"]
+        
+        if model_args.pretrain_mllm_with_lora is not None: # This is for maybe stage-2 Train visual, proj, LLM.
+            ckpt = torch.load(model_args.pretrain_mllm_with_lora, map_location='cpu')
+            model.load_state_dict(ckpt)
+            if is_rank_zero():
+                print(f'Loading the pretrain mllm model that contains LoRA')
+        if not model_args.freeze_vision_tower:
+            unfreeze_module.append('vision_tower')
+        
         for n, p in model.named_parameters():
-            if any(
-                [x in n for x in ["vision_tower", "mm_projector", "embed_tokens", "lm_head"]]
-            ):
+            if any([x in n for x in unfreeze_module]):
                 p.requires_grad = True
         if is_rank_zero():
             print_trainable_parameters(model)
             model.print_trainable_parameters()        
     elif is_rank_zero():
         print_trainable_parameters(model)
+    
 
+
+    
     rank0_print("=" * 20 + " Dataset preparation " + "=" * 20)
     data_args.max_length = training_args.model_max_length
     data_args.proj_out_num = model.get_model().mm_projector.proj_out_num

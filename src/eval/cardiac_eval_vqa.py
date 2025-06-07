@@ -70,8 +70,10 @@ def parse_args(args=None):
     parser.add_argument(
         '--shape_mode', type=str, default='crop', help="Setting image preprocessing method, only in [`crop`, `resize`] is Keep resolution then CROP, or Resize and then Crop."
     )
-    parser.add_argument('--test_size', type=int, default=-1)
-    parser.add_argument('--do_jpeg', action='store_true', default=False)
+    parser.add_argument('--test_size', type=int, default=-1, help='Using how many patient to test, is only for speed run')
+    parser.add_argument('--do_jpeg', action='store_true', default=False, help='Try to simulate M3D reconstruct CT Scan from jpeg image')
+    parser.add_argument('--input_size', type=int, nargs="+", default=(256 ,256, 128))
+    parser.add_argument('--axes_code', type=str, default='RAS', help='following `monai.transforms.Orientation`')
     
     parser.add_argument('--vision_tower', type=str, default='dcformer')
     parser.add_argument("--max_length", type=int, default=512)
@@ -120,6 +122,9 @@ def load_model_tokenizer(args):
             args.model_name_or_path, device_map="auto", trust_remote_code=True
         )
     except Exception as e:
+        import traceback as tb
+        tb.print_exc()
+        
         model = VLMQwenForCausalLM.from_pretrained(
             args.model_name_or_path, device_map='auto', trust_remote_code=True, torch_dtype=torch.bfloat16
         )
@@ -209,6 +214,7 @@ def load_test_dataset(args, tokenizer):
     return filted_pack
 
 def get_image_loader(args):
+    """Ignore this method"""
     def _slicewise_range(_pack, method):
         return np.stack([method(_pack['image'][..., idx]) for idx in range(_pack['image'].shape[-1])], axis=-1)
     pixdim = (.39, .39, .625) if args.shape_mode == 'crop' else (.78, .78, .625)

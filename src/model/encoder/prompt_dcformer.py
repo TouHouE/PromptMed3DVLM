@@ -305,7 +305,10 @@ class MaskPromptDCFormer(nn.Module):
         self.dcformer = DCFormer(config)
         self.prompt_encoder = MaskPromptEncoder(config)
 
-    def forward(self, pixel_values, masks=None, no_prompt=False):
+    def forward(self, pixel_values, masks=None, no_prompt=False, return_dcformer=False):
+        """
+            The `no_prompt` is meaning don't adding anything on dcformer output.
+        """
         logger.debug(f'Input Shape: {pixel_values.shape}')
 
         feature_list = self.dcformer(pixel_values)
@@ -316,8 +319,16 @@ class MaskPromptDCFormer(nn.Module):
         if masks is None:
             logger.info(f'No `masks` is provided, use all-zero mask instead')
             masks = torch.zeros_like(pixel_values)
-
+        
+            
         masks_prompt = self.prompt_encoder(masks, return_hidden_states=True)
+
+        if return_dcformer:
+            fuse_list = list()
+            for i, (image_embedding, mask_prompt) in enumerate(zip(feature_list, mask_prompt)):
+                fuse_list.append(image_embedding + mask_prompt)
+            return feature_list, fuse_list
+
 
         for i, (image_embedding, mask_prompt) in enumerate(zip(feature_list, masks_prompt)):
             logger.debug(f'Image+Prompt|{image_embedding.shape}:image|{mask_prompt.shape}:mask prompt')

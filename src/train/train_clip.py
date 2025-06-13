@@ -12,7 +12,7 @@ from transformers import AutoTokenizer
 import wandb
 from src.dataset.clip_dataset import CLIPDataset, CardiacCLIPDataset
 from src.model.CLIP import DEC_CLIP, DEC_CLIPConfig
-
+from src.model.prompt_clip import PromptCLIPConfig, PromptCLIP
 
 def is_rank_zero():
     if "RANK" in os.environ:
@@ -74,9 +74,20 @@ class DataArguments:
         default="./data/M3D_Cap_npy/M3D_Cap.json",
         metadata={"help": "Path to caption data."},
     )
-    shape_mode: str = field(default='crop')
+    loader_type: str = field(default='unet-med3d-resize', metadata={
+        "help": """with 3 statements: <intensity-mode>-<model-arch-mode>-<shape-mode>. 
+        For <intensity-mode>: [unet, minmax, jpeg]. 
+        For <model-arch-mode>: [med3d, m3d]. 
+        For <shape-mode>: [resize, crop, fgcrop].
+        """
+    })
+    # shape_mode: str = field(default='crop')
     max_length: int = field(default=512)
-
+    append_keys: list[tuple[str, str]] = field(default_factory=list, metadata={
+        "help": "Apply with format: <key1>;<key2> <key3>;<key4>, the left key will be mapping to the right key in the `DataCollator`."
+    })
+    def __post_init__(self):
+        self.append_keys = [pair_str.split(';') for pair_str in self.append_keys]
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
@@ -127,32 +138,58 @@ def preprocess_logits_for_metrics(logits, labels):
 
 @dataclass
 class DataCollator:
-    def __init__(self, gather_all):
+    keys: list[str]
+    dst_keys: list[str]
+
+    def __init__(self, gather_all, keys=None, mapping_keys=None, append_keys_pair: list(tuple(str, str))=None):
         self.gather_all = gather_all
+        if keys is None:
+            self.keys = ["image", "mask", "text", "input_id", "attention_mask"]
+        if mapping_keys is None:
+            self.dst_keys=['images', 'masks', 'text', 'input_ids', 'attention_mask']
+        assert len(self.keys) == len(self.dst_keys), f"keys({len(self.keys)} and dst_keys({len(self.dst_keys)}) must have the same length."
+        if append_keys_pair is not None:
+            for (key_in_ds, key_in_model) in append_keys_pair:
+                self.keys.append(key_in_ds)
+                self.dst_keys.append(key_in_model)
+        print(f'All of key come from Dataset: {self.keys}')
+        print(f'All of key apply into Model: {self.dst_keys}')
 
-    def __call__(self, batch: list) -> dict:
-        images, texts, input_ids, attention_mask = tuple(
-            [b[key] for b in batch]
-            for key in ("image", "text", "input_id", "attention_mask")
-        )
+    def __call__(self, batch: list[dict[str, torch.Tensor | str]]) -> dict[str, torch.Tensor | list[str]]:
+        # images, masks, texts, input_ids, attention_mask, image_Fgs = tuple(
+        #     [b[key] for b in batch]
+        #     for key in ("image", 'mask', "text", "input_id", "attention_mask", 'image_Fg')
+        # )
+        return_dict: dict[str, torch.Tensor | list[str]] = {
+            dst_key: [b[key] for b in batch] for key, dst_key in zip(self.keys, self.dst_keys)
+        }
 
-        images = torch.cat([_.unsqueeze(0) for _ in images], dim=0)
-        input_ids = torch.cat([_.unsqueeze(0) for _ in input_ids], dim=0)
-        attention_mask = torch.cat([_.unsqueeze(0) for _ in attention_mask], dim=0)
+        for key, list_value in return_dict.items():
+            list_value: torch.Tensor | list[str]
+            if torch.is_tensor(list_value[0]):
+                return_dict[key] = torch.stack(list_value)
 
-        batch_size = images.shape[0]
+        # images = torch.cat([_.unsqueeze(0) for _ in images], dim=0)
+        # input_ids = torch.cat([_.unsqueeze(0) for _ in input_ids], dim=0)
+        # attention_mask = torch.cat([_.unsqueeze(0) for _ in attention_mask], dim=0)
+        # masks = torch.stack(masks)
+        # image_Fgs = torch.stack(image_Fgs)
+
+        batch_size = return_dict['images'].shape[0]
         if self.gather_all:
             world_size = torch.distributed.get_world_size()
             batch_size *= world_size
 
-        labels = torch.arange(batch_size, device=images.device, dtype=torch.long)
+        return_dict['labels'] = torch.arange(batch_size, device=return_dict['images'].device, dtype=torch.long)
 
-        return_dict = dict(
-            images=images,
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels,
-        )
+        # return_dict = dict(
+        #     images=images,
+        #     masks=masks,
+        #     input_ids=input_ids,
+        #     attention_mask=attention_mask,
+        #     labels=labels,
+        #     image_Fgs=image_Fgs
+        # )
 
         return return_dict
 
@@ -161,12 +198,21 @@ def main():
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments)
     )
+    model_args: ModelArguments
+    data_args: DataArguments
+    training_args: TrainingArguments
+
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     tokenizer = AutoTokenizer.from_pretrained(model_args.language_model_name_or_path)
-
-    config = DEC_CLIPConfig.from_dict(vars(model_args))
-    model = DEC_CLIP(config)
+    if model_args.vision_encoder == 'dcformer':
+        config = DEC_CLIPConfig.from_dict(vars(model_args))
+        model = DEC_CLIP(config)
+    elif model_args.vision_encoder in ['prompt_dcformer', 'mask_prompt_dcformer']:
+        config = PromptCLIPConfig.from_dict(vars(model_args))
+        model = PromptCLIP(config)
+    else:
+        raise NotImplementedError(f"Unexpected vision encoder: {model_args.vision_encoder}")
 
     if model_args.pretrained_model:
         # ckpt = torch.load(model_args.pretrained_model)
@@ -198,7 +244,9 @@ def main():
         gather_all = True
     else:
         gather_all = False
-    data_collator = DataCollator(gather_all)
+    data_collator = DataCollator(gather_all, append_keys_pair=data_args.append_keys)
+
+    compute_metrics = None
 
     trainer = CLIPTrainer(
         model=model,

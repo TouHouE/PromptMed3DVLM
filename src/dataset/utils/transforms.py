@@ -1,8 +1,9 @@
-from typing import Iterable
+from typing import Iterable, Literal
 
 import numpy as np
 import torch
 from monai import transforms as MT
+
 
 def nnunet_scaler(pack) -> dict | Iterable[float | int]:
     is_dict = isinstance(pack, dict)        
@@ -27,38 +28,65 @@ def adding_new_keys(pack: dict[str, torch.Tensor]):
     return pack
 
 
-def get_clip_loader(args, load_kwargs) -> list[callable]:
+def get_fg_loader(args, load_kwargs) -> list[callable]:
     """
         the load_kwargs only contains `keys` and `allow_missing_keys` 2 keys
+        basically when `args.loader_type == 'unet-med3d-fgcrop' will get into here.
     """
-    comp = [MT.LoadImaged(**load_kwargs), MT.EnsureChannelFirstd(**load_kwargs), MT.Orientationd(axcodes='RAS', **load_kwargs)]
-    if args.shape_mode == 'crop':
-        spacing = (.39, .39, .625)        
-    elif args.shape_mode == 'resize':
-        spacing = (.78, .78, 1.25)
-    
-    if args.shape_mode != 'fgcrop':
-        comp.append(MT.Spacingd(**load_kwargs, pixdim=spacing, mode=('trilinear', 'nearest')))
-    
-    comp.append(MT.Lambda(lambda pack: nnunet_scaler(pack)))
 
-    if args.shape_mode == 'fgcrop':
-        # keys=['image', 'label'], source_key='label', allow_missing_keys=True, classes_range=[0, 10]     
-        comp.append(MT.Lambda(lambda pack: adding_new_keys(pack)))  # ['image', 'label', 'image_Fg', 'Fg_mask]
-        comp.append(DummyCropForeground(classes_range=[0, 10], source_key='mask_Fg', keys=['image_Fg', 'mask_Fg'], allow_missing_keys=True))
-        comp.append(MixedResizer(
-            spatial_size=(256, 256, 128),
-            padder_kwargs=dict(mode='constant', constant_values=0, method='end'),
-            resizer_kwargs=dict(mode=('trilinear', 'trilinear', 'nearest'), size_mode='all'),
-            keys=['image', 'image_Fg', 'label'], allow_missing_keys=True
-        ))
-        comp.append(MT.DeleteItemsd(keys=['mask_Fg'], allow_missing_keys=True))
-    else:                
-        comp.append(MT.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), **load_kwargs))
-
+    comp: list[callable] = [
+        MT.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
+        MT.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
+        MT.Orientationd(axcodes='RAS', keys=['image', 'label'], allow_missing_keys=True)
+    ]
+    comp.append(MT.Lambda(nnunet_scaler))
+    comp.append(MT.Lambda(adding_new_keys))
+    comp.append(
+        DummyCropForeground(
+            classes_range=[0, 10], source_key='mask_Fg', keys=['image_Fg', 'mask_Fg'], allow_missing_keys=True
+        )
+    )
+    comp.append(MixedResizer(
+        spatial_size=(256, 256, 128),
+        padder_kwargs=dict(mode='constant', constant_values=0, method='end'),
+        resizer_kwargs=dict(mode=('trilinear', 'trilinear', 'nearest'), size_mode='all'),
+        keys=['image', 'image_Fg', 'label'], allow_missing_keys=True
+    ))
+    comp.append(MT.DeleteItemsd(keys=['mask_Fg']))
+    comp.append(MT.ResizeWithPadOrCropd(keys=['image', 'label', 'image_Fg'], spatial_size=(256, 256, 128), allow_missing_keys=True))
+    comp.append(MT.ToTensord(keys=['image', 'label', 'image_Fg']))
 
     return comp
 
+
+def get_normal_loader(args, load_kwargs):
+    scaler_type, model_arch_type, shape_type = args.loader_type.split('-')
+    input_size = args.input_size
+
+    if scaler_type == 'unet':
+        scaler = MT.Lambda(nnunet_scaler)
+    elif scaler_type == 'jpeg':
+        scaler = PseudoJPEGScaleIntensity(keys=['image'])
+    elif scaler_type == 'minmax':
+        scaler = MT.ScaleIntensityd(keys=['image'])
+    else:
+        raise NotImplementedError(f"Unexpected scaler type: {scaler_type}")
+    stem = [
+        MT.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
+        MT.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cuda'),
+        MT.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
+        MT.Orientationd(axcodes="RAS", **load_kwargs),
+        scaler
+    ]
+
+    if model_arch_type == 'm3d':
+        stem.append(MT.Orientationd(axcodes="SRA", keys=['image', 'label'], allow_missing_keys=True))
+        input_size = (32, 256, 256)
+    if shape_type == 'resize':
+        stem.append(MT.Zoomd(factor=.5, mode=('trilinear', 'nearest'), keys=['image', 'label'], allow_missing_keys=True))
+    stem.append(MT.ResizeWithPadOrCropd(spatial_size=input_size, **load_kwargs))
+    stem.append(MT.ToTensord(**load_kwargs))
+    return stem
 
 
 class DummyCropForeground:
@@ -109,3 +137,23 @@ class MixedResizer:
     def __call__(self, pack):        
         pack = self.resizer(pack)
         return self.padder(pack)
+    
+
+class PseudoJPEGScaleIntensity:
+    def __init__(self, keys, tensor_type: Literal['numpy', 'torch']):
+        self.ttype = tensor_type
+        self.keys = keys
+        self.to_jpeg = MT.ScaleIntensity(0, 255, dtype=torch.uint8)
+        self.to_01 = MT.ScaleIntensity(dtype=torch.float)
+
+    def on_slice(self, volume):
+        depth = volume.shape[-1]
+        return torch.stack([self.to_01(self.to_jpeg(volume[..., d])) for d in depth], dim=-1)
+
+    def __call__(self, data):
+        for key, value in data.items():
+            if key not in self.keys:
+                continue
+            data[key] = self.on_slice(value)
+        return data
+

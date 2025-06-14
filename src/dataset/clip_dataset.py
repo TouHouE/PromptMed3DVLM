@@ -11,8 +11,8 @@ from torch.utils.data import Dataset
 from monai.transforms import allow_missing_keys_mode
 from monai.data import set_track_meta, MetaTensor
 
-from utils import transforms as UT
-from utils import io as UIO
+from src.dataset.utils import transforms as UT
+from src.dataset.utils import io as UIO
 
 
 def custom_scale(pack):
@@ -28,7 +28,7 @@ class CardiacCLIPDataset(Dataset):
         self.data_root = args.data_root
         self.tokenizer = tokenizer
         self.mode = mode
-        self.data_list = UIO.load_json(join(args.data_root, f'caption_{mode}.json'))
+        self.data_list = UIO.load_json(join(args.data_root, f'caption_{mode}_adding_mask.json'))
         
         if getattr(args, 'ignore_split', False) and mode == 'test':
             self.data_list.extend(UIO.load_json(join(args.data_root, f'caption_val.json')))
@@ -40,11 +40,11 @@ class CardiacCLIPDataset(Dataset):
         load_kwargs = dict(allow_missing_keys=True)
         load_kwargs['keys'] = ['image', 'label']
 
-        loader_comp = UT.get_fg_loader(args, dict(keys=['image', 'label'], allow_missing_keys=True))
+        loader_comp = UT.get_loader(args)
         self.loader = mtf.Compose(loader_comp)
         train_transform = mtf.Compose(
             [
-                mtf.RandRotate90(prob=0.5, spatial_axes=(0, 1), keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
+                mtf.RandRotate90d(prob=0.5, spatial_axes=(0, 1), keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
                 mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
                 mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
                 mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
@@ -101,13 +101,18 @@ class CardiacCLIPDataset(Dataset):
             'image': pack['image']
         }
         if 'label' in pack:                    
-            vpack['label'] = pack['label']                
+            vpack['label'] = pack['label']
+        if 'organ' in pack:
+            vpack['organ'] = pack['organ']
         vpack: dict[str, MetaTensor] = self.loader(vpack)
         vpack = self.transform(vpack)   # It must contains `image`, and possible `label`, `image_Fg`
         return vpack
 
     def __getitem__(self, idx):                    
         data = self.data_list[idx]
+        data['label'] = random.sample(
+            list(set(data['mask_pool'])), 1
+        )[0]
         data: dict[str, str] = UIO.load_make_sure_exists(data)
 
         if data is None:

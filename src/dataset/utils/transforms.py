@@ -28,12 +28,11 @@ def adding_new_keys(pack: dict[str, torch.Tensor]):
     return pack
 
 
-def get_fg_loader(args, load_kwargs) -> list[callable]:
+def get_fg_loader(args) -> list[callable]:
     """
         the load_kwargs only contains `keys` and `allow_missing_keys` 2 keys
         basically when `args.loader_type == 'unet-med3d-fgcrop' will get into here.
     """
-
     comp: list[callable] = [
         MT.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
         MT.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
@@ -59,7 +58,7 @@ def get_fg_loader(args, load_kwargs) -> list[callable]:
     return comp
 
 
-def get_normal_loader(args, load_kwargs):
+def get_normal_loader(args):
     scaler_type, model_arch_type, shape_type = args.loader_type.split('-')
     input_size = args.input_size
 
@@ -75,7 +74,7 @@ def get_normal_loader(args, load_kwargs):
         MT.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
         MT.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cuda'),
         MT.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
-        MT.Orientationd(axcodes="RAS", **load_kwargs),
+        MT.Orientationd(axcodes="RAS", keys=['image', 'label'], allow_missing_keys=True),
         scaler
     ]
 
@@ -84,9 +83,15 @@ def get_normal_loader(args, load_kwargs):
         input_size = (32, 256, 256)
     if shape_type == 'resize':
         stem.append(MT.Zoomd(factor=.5, mode=('trilinear', 'nearest'), keys=['image', 'label'], allow_missing_keys=True))
-    stem.append(MT.ResizeWithPadOrCropd(spatial_size=input_size, **load_kwargs))
-    stem.append(MT.ToTensord(**load_kwargs))
+    stem.append(MT.ResizeWithPadOrCropd(spatial_size=input_size, keys=['image', 'label'], allow_missing_keys=True))
+    stem.append(MT.ToTensord(keys=['image', 'label'], allow_missing_keys=True))
     return stem
+
+
+def get_loader(args):
+    if 'fgcrop' in args.loader_type:
+        return get_fg_loader(args)
+    return get_normal_loader(args)
 
 
 class DummyCropForeground:

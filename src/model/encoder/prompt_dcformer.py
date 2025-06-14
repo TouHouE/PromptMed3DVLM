@@ -325,7 +325,7 @@ class MaskPromptDCFormer(nn.Module):
 
         if return_dcformer:
             fuse_list = list()
-            for i, (image_embedding, mask_prompt) in enumerate(zip(feature_list, mask_prompt)):
+            for i, (image_embedding, mask_prompt) in enumerate(zip(feature_list, masks_prompt)):
                 fuse_list.append(image_embedding + mask_prompt)
             return feature_list, fuse_list
 

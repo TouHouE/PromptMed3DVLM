@@ -24,7 +24,10 @@ def nnunet_scaler(pack) -> dict | Iterable[float | int]:
 
 def adding_new_keys(pack: dict[str, torch.Tensor]):
     pack['image_Fg'] = pack['image'].clone()
-    pack['mask_Fg'] = pack['label'].clone()
+    if 'label' in pack:
+        pack['mask_Fg'] = pack['label'].clone()
+    else:
+        pack['mask_Fg'] = None
     return pack
 
 
@@ -41,16 +44,16 @@ def get_fg_loader(args) -> list[callable]:
     comp.append(MT.Lambda(nnunet_scaler))
     comp.append(MT.Lambda(adding_new_keys))
     comp.append(
-        DummyCropForeground(
+        MT.Lambda(DummyCropForeground(
             classes_range=[0, 10], source_key='mask_Fg', keys=['image_Fg', 'mask_Fg'], allow_missing_keys=True
-        )
+        ))
     )
-    comp.append(MixedResizer(
+    comp.append(MT.Lambda(MixedResizer(
         spatial_size=(256, 256, 128),
         padder_kwargs=dict(mode='constant', constant_values=0, method='end'),
         resizer_kwargs=dict(mode=('trilinear', 'trilinear', 'nearest'), size_mode='all'),
         keys=['image', 'image_Fg', 'label'], allow_missing_keys=True
-    ))
+    )))
     comp.append(MT.DeleteItemsd(keys=['mask_Fg']))
     comp.append(MT.ResizeWithPadOrCropd(keys=['image', 'label', 'image_Fg'], spatial_size=(256, 256, 128), allow_missing_keys=True))
     comp.append(MT.ToTensord(keys=['image', 'label', 'image_Fg']))
@@ -94,8 +97,12 @@ def get_loader(args):
     return get_normal_loader(args)
 
 
-class DummyCropForeground:
-    def __init__(self, classes_range: range | list[int, int], **kwargs):
+def select_fn(x):
+    return x == 1
+
+
+class DummyCropForeground(MT.Transform):
+    def __init__(self, classes_range: range | list[int, int], source_key: str, **kwargs):
         """
             The classes_range is the range of the foreground classes if is a list the actual range will be:
             list(n0, n1) -> range(n0, n1 + 1)
@@ -103,29 +110,31 @@ class DummyCropForeground:
         # super().__init__(**kwargs)
         if isinstance(classes_range, list):
             classes_range = range(classes_range[0], classes_range[1] + 1)                        
-        self.cropper = MT.CropForegroundd(select_fn=lambda x: x == 1, **kwargs)        
+        self.cropper = MT.CropForegroundd(select_fn=select_fn, source_key=source_key, **kwargs)
+        self.rand_cropper = MT.CenterSpatialCrop(roi_size=(128, 128, 128))
+        self.source_key = source_key
         self.full_class = classes_range
         
     def __call__(self, pack: dict):
-        if 'label' not in pack:
+        src_k = self.source_key
+
+        if src_k not in pack:
+            pack['image_Fg'] = self.rand_cropper(pack['image_Fg'])
+
             return pack
-        
+
         if 'organ' not in pack:
             organ = self.full_class
         else:
             organ = pack['organ']
-
         for organ_id in organ:
-            print(organ_id)
-            pack['label'][pack['label'] == organ_id] = -1
-        print(f'{type(pack["label"])}')
-        pack['label'][pack['label'] > -1] = 0
-        pack['label'][pack['label'] == -1] = 1
-        breakpoint()
+            pack[src_k][pack[src_k] == organ_id] = -1
+        pack[src_k][pack[src_k] > -1] = 0
+        pack[src_k][pack[src_k] == -1] = 1
         return self.cropper(pack)
 
 
-class MixedResizer:
+class MixedResizer(MT.Transform):
     def __init__(self, keys, allow_missing_keys, spatial_size, padder_kwargs, resizer_kwargs):
         self.final_size = spatial_size
         self.padder = MT.ResizeWithPadOrCropd(

@@ -63,7 +63,6 @@ class ModelArguments:
     loss_type: str = field(default="nce")
     siglip_margin: float = field(default=0.1)
 
-
 @dataclass
 class DataArguments:
     data_root: str = field(
@@ -79,6 +78,7 @@ class DataArguments:
         For <intensity-mode>: [unet, minmax, jpeg]. 
         For <model-arch-mode>: [med3d, m3d]. 
         For <shape-mode>: [resize, crop, fgcrop].
+        e.g.: unet-med3d-fgcrop
         """
     })
     # shape_mode: str = field(default='crop')
@@ -147,6 +147,7 @@ class DataCollator:
             self.keys = ["image", "mask", "text", "input_id", "attention_mask"]
         if mapping_keys is None:
             self.dst_keys=['images', 'masks', 'text', 'input_ids', 'attention_mask']
+
         assert len(self.keys) == len(self.dst_keys), f"keys({len(self.keys)} and dst_keys({len(self.dst_keys)}) must have the same length."
         if append_keys_pair is not None:
             for (key_in_ds, key_in_model) in append_keys_pair:

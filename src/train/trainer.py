@@ -22,6 +22,7 @@ class CLIPTrainer(Trainer):
     def compute_loss(
         self, model, inputs, return_outputs=False, num_items_in_batch=None
     ):
+        inputs['step'] = self.state.global_step
         outputs = model(**inputs)
         loss = outputs["loss"]
 

@@ -144,11 +144,9 @@ class PromptCLIP(PreTrainedModel):
         lambda1, lambda2, lambda3 = self.config.init_lambda
         return lambda1, lambda2, lambda3
 
-    def forward(self, images, input_ids, attention_mask, labels, **kwargs):
-        masks = kwargs.pop('images')
-        image_fg = kwargs.pop('image_fg')
+    def forward(self, images, input_ids, attention_mask, labels, masks, image_fgs, **kwargs):
         step = kwargs.pop('step')
-        image_features, fuse_features = self.encode_image(images, masks=masks, image_fg=image_fg, return_dcformer=True)
+        image_features, fuse_features = self.encode_image(images, masks=masks, image_fg=image_fgs, return_dcformer=True)
 
         text_features = self.encode_text(input_ids, attention_mask)
 

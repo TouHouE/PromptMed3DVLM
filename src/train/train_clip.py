@@ -141,7 +141,7 @@ class DataCollator:
     keys: list[str]
     dst_keys: list[str]
 
-    def __init__(self, gather_all, keys=None, mapping_keys=None, append_keys_pair: list(tuple(str, str))=None):
+    def __init__(self, gather_all, keys=None, mapping_keys=None, append_keys_pair: list[tuple[str, str]]=None):
         self.gather_all = gather_all
         if keys is None:
             self.keys = ["image", "mask", "text", "input_id", "attention_mask"]

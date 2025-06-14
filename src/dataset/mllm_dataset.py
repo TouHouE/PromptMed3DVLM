@@ -27,13 +27,14 @@ import pandas as pd
 from monai.data import set_track_meta, MetaTensor
 from torch.utils.data import Dataset, ConcatDataset
 from src.dataset.prompt_templates import Caption_templates
-
+from utils import io as UIO
+from utils import transforms as UT
 
 # Start Define Custom TypeHint
 UserType = Literal['human', 'user']
 BotType = Literal['gpt', 'assistant']
 RoleType = Literal['system', UserType, BotType]
-MessageKeyType = Literal['role', 'value']
+MessageKeyType = Literal['role', 'content']
 SpeekType = dict[MessageKeyType, RoleType | str]
 ConversationType = list[SpeekType]
 CardiacDataKey = Literal['image', 'label', 'conversations']
@@ -47,146 +48,32 @@ TorchCardiacData = dict[TorchCardiacDataKey, torch.Tensor | str | MetaTensor]
 PAD_EOS_SWAP_TMP_TOKEN = -100
 
 
-def load_jfile(path: str) -> list[dict]:
-    with open(path, 'r', encoding='utf-8') as loader:
-        if path.endswith('.jsonl'):
-            return [json.loads(line.strip('\n')) for line in loader.readlines()]    
-        return json.load(loader)
-
-
 def get_prompt() -> str:
     return r"""If the input includes CT scans from at least two distinct cardiac phases, you can proceed with the requested calculation."""
 
 
-
-# A debugging usage method
-def return_print(data, stage=None) -> any:
-    if stage is not None:
-        print(f'\nStart {stage}')
-    if isinstance(data, dict):
-        for key, value in data.items():
-            if torch.is_tensor(value):
-                print(f'{key}:: {value.shape}')
-            else:
-                print(f'{key}:: {value}')
-    elif isinstance(data, list):
-        for idx, value in enumerate(data):
-            if torch.is_tensor(value):
-                print(f'{idx}-th:: {value.shape}')
-            else:
-                print(f'{idx}-th:: {value}')
-    elif torch.is_tensor(data):
-        print(f'{data.shape}')
+def get_image_loader(args, mode='train') -> mtf.Transform:
+    load_kwargs = dict(keys=['image', 'label'], allow_missing_keys=True)
+    if 'fgcrop' in args.loader_type:
+        stem = UT.get_fg_loader(args, load_kwargs=load_kwargs)
     else:
-        print(f'{data}')
-    if stage is not None:
-        print(f'End of {stage}')
+        stem = UT.get_normal_loader(args, load_kwargs=load_kwargs)
 
-    return data
-
-
-def load_make_sure_exists(pack):
-    possible_root = ['/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei', '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei']
-    # public_root = ''/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei''
-    possible_mid_path = [
-        'to_saturn',    # for Taipei_502,
-        'to_saturn_yeh',
-        'to_saturn_beato'
-    ]
-    for public_root in possible_root:
-        for mid_path in possible_mid_path:
-            cur_abs_path = join(public_root, mid_path, pack['image'])
-            # print(f'Cur_abs_path: {cur_abs_path}')
-            if os.path.exists(cur_abs_path):
-                pack['image'] = cur_abs_path
-
-                if pack.get('label', None) is not None:
-                    pack['label'] = join(public_root, mid_path, pack['label'])
-                    if not os.path.exists(pack['label']):
-                        pack.pop('label')
-                return pack
-    return None
-
-def nnunet_scale(pack):
-    np.clip(pack['image'], -395.0, 842.0, out=pack['image'])
-    pack['image'] -= 279.8117370605469
-    pack['image'] /= 253.5583953857422
-    return pack
-
-
-def get_image_loader(args, mode='train'):
-    axes_code: str = getattr(args, 'axes_code', 'RAS')
-    final_shape: tuple[int] = getattr(args, 'input_size', (256, 256, 128))
-    
-    if getattr(args, 'shape_mode', 'crop') == 'resize':
-        spacing = (.78, .78, 1.25)
-    else:
-        spacing = (.39, .39, .625)
-    print(f'Preprocessor Info: \n - Axes Code: {axes_code}\n - Shape: {final_shape}\n - Assumption Resolution: {spacing}')
-    stem = [
-        mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
-        mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),        
-        mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True)
-    ]
-    
-    
-    stem.extend([
-        mtf.Spacingd(
-            keys=['image', 'label'], allow_missing_keys=True, 
-            pixdim=spacing, mode=('trilinear', 'nearest')
-        ),
-        mtf.Orientationd(keys=['image', 'label'], axcodes=axes_code, allow_missing_keys=True),
-        mtf.Lambda(lambda pack: nnunet_scale(pack)),        
-        mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=final_shape, allow_missing_keys=True),
-    ])
-    
-    
-    
-    if mode == 'train':
+    if mode == 'train': # Adding some random shit
         stem.extend([                                             
-            # Random Shit
-            mtf.RandRotate90d(prob=0.5, spatial_axes=(0, 1), keys=['image', 'label'], allow_missing_keys=True),
-            mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label'], allow_missing_keys=True),
-            mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label'], allow_missing_keys=True),
-            mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label'], allow_missing_keys=True),
-            mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image'], allow_missing_keys=True),
-            mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image'], allow_missing_keys=True),
+
+            mtf.RandRotate90d(prob=0.5, spatial_axes=(0, 1), keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
+            mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
+            mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
+            mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
+            mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image', 'image_Fg'], allow_missing_keys=True),
+            mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image', 'image_Fg'], allow_missing_keys=True),
         ])
-    
-    if sum(isinstance(_proc, mtf.EnsureTyped) for _proc in stem) % 2 == 1:
-        stem.append(mtf.EnsureTyped(device='cpu', keys=['image', 'label'], allow_missing_keys=True))
-        print(f'Make sure all of tensor will back to CPU')
-    stem.append(mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True))
-    
-    if getattr(args, "do_jpeg", False):
-        def _slicewise_range(_pack: dict[str, torch.Tensor | np.ndarray], method: callable) -> dict[str, torch.Tensor | np.ndarray]:
-            z = _pack['image'].shape[-1]
-            cand_image = [method(_pack['image'][..., idx]) for idx in range(z)]               
-            stacker = partial(np.stack, axis=-1)
-                              
-            if torch.is_tensor(_pack['image']):
-                stacker = partial(torch.stack, dim=-1)                                
-            _pack['image'] = stacker(cand_image)
-            return _pack
-        return {
-            'my': mtf.Compose(stem),
-            'jpeg': mtf.Compose([
-            mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
-            # mtf.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cuda', data_type='tensor'),
-            mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
-            mtf.Orientationd(keys=['image', 'label'], axcodes="RAS", allow_missing_keys=True),
-            mtf.Lambda(lambda _pack: _slicewise_range(_pack, mtf.ScaleIntensity(0, 255, np.int32))),
-            mtf.Spacingd(keys=['image', 'label'], pixdim=spacing, mode=('trilinear', 'nearest'),
-                         allow_missing_keys=True),            
-            mtf.Orientationd(keys=['image', 'label'], axcodes=axes_code, allow_missing_keys=True),
-            mtf.ScaleIntensityd(keys=['image'], allow_missing_keys=True),                
-            mtf.ResizeWithPadOrCropd(keys=['image', 'label'], spatial_size=final_shape, allow_missing_keys=True),
-            # mtf.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cpu', data_type='tensor'),
-            mtf.ToTensord(dtype=torch.float, keys=['image', 'label'], allow_missing_keys=True)
-        ])
-        }
+
+    stem.append(mtf.ToTensord(dtype=torch.float, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True))
     
     return mtf.Compose(stem)
+
 
 class CardiacDataset(Dataset):
     image_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei'
@@ -203,22 +90,23 @@ class CardiacDataset(Dataset):
         self.mode = mode
         self.image_tokens = '<im_patch>' * args.proj_out_num
         self.data_list = list()
-        all_pack = load_jfile(join(self.public_root, f'gemini_split_{mode}.json'))
-        all_pack.extend(load_jfile(join(self.public_root, f'gemini_split_{mode}_add_phase.json')))
+        all_pack = UIO.load_json(join(self.public_root, f'gemini_split_{mode}.json'))
+        all_pack.extend(UIO.load_json(join(self.public_root, "caption_train.json")))
         
         if getattr(args, 'is_promptsubset', False):
             print(f'`--is_promptsubset` is set')
             print(f'That meaning we trying to evaluate the model training on `PromptSubset`')
             new_path = 'prompt_subset_testset.json'
-            all_pack = load_jfile(join(self.public_root, new_path))
+            all_pack = UIO.load_json(join(self.public_root, new_path))
         if getattr(args, 'dataset_scale', 'full') == 'd10':
             d10_name = 'gemini_split_train_1e-1.json'
             print(f'All training data will decrease 10 scale for `dataset_scale` was set to "d10".')
-            all_pack = load_jfile(join(self.public_root, d10_name))
+            all_pack = UIO.load_json(join(self.public_root, d10_name))
         no_content_regex = r'(none\n){0,1}<image>(\nnone){0,1}'
         drop_num = 0
+
         for _, pack in enumerate(all_pack):
-            abs_pack: CardiacData | None = load_make_sure_exists(pack)
+            abs_pack: CardiacData | None = UIO.load_make_sure_exists(pack)
             if abs_pack is None:
                 with open('./missing_file.txt', 'a+') as ostream:
                     ostream.write(f"File: {pack['image']} False\n")
@@ -244,27 +132,8 @@ class CardiacDataset(Dataset):
             
             self.data_list.append(abs_pack)
         print(f'Size of data list: {len(self.data_list)}, Dropped: {drop_num}, Original: {len(all_pack)}')
+        self.image_loader = get_image_loader(args, mode)
 
-        # with open('/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei/taipei_502_vqa.jsonl', 'r') as reader:
-        #     for pack in reader.readlines():
-        #         pack = json.loads(pack)
-        #         pack['image'] = join(self.image_root, 'to_saturn', pack['image'])
-        #         if 'label' in pack:
-        #             pack['label'] = join(self.image_root, 'to_saturn', pack['label'])
-        #
-        #         self.data_list.append(pack)
-        # with open('/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei/taipei_2897_yeh_conv.jsonl', 'r') as reader:
-        # if args.do_jpeg:
-        loader_pack = get_image_loader(args, mode)
-        
-        # self.image_loader = get_image_loader(args, mode)
-        if getattr(args, "do_jpeg", False):
-            self.jpeg_loader = loader_pack['jpeg']
-            self.image_loader = loader_pack['my']
-            uni_pid = list(set(_pack['pid'] for _pack in self.data_list))[:args.test_size]
-            self.data_list = list(filter(lambda _pack: _pack['pid'] in uni_pid, self.data_list))                        
-        else:
-            self.image_loader = loader_pack
 
     def load_visual_pack(self, loader_pack, loader):        
         visual_pack = loader(loader_pack)        
@@ -274,19 +143,25 @@ class CardiacDataset(Dataset):
             visual_pack['label'] = None
         return visual_pack
 
+    def prepare_query_answer(self, pack):
+        if 'conversations' in pack:
+            convs = pack['conversations']
+            query = list(filter(lambda conv_case: conv_case['from'] == 'human', convs))[0]['value']
+            answer = list(filter(lambda conv_case: conv_case['from'] == 'gpt', convs))[0]['value']
+            return query, answer
+        query = random.sample(Caption_templates, 1)[0]
+        caption_pack = random.sample(pack['caption'], 1)[0]
+        answer = caption_pack['text']
+        query = f'{query} Generating style with {caption_pack["style"]}'
+        return query, answer
+
+
     def __getitem__(self, idx):
-        if getattr(self, "args.do_jpeg", False):
-            print(f'Load at-{idx}')
-        # print(f'Start Loading {idx}')
-        cur_pack = self.data_list[idx]
-        # cur_pack = check_image_and_download(cur_pack)
+        cur_pack: dict | None = self.data_list[idx]
         if cur_pack is None:
             return self.__getitem__(idx + 1)
-        conv = cur_pack['conversations']
-        query = list(filter(lambda conv_case: conv_case['from'] == 'human', conv))[0]['value']
-        query = re.sub('\n{0,1}<image>\n{0,1}', '', query)
+        query, answer = self.prepare_query_answer(cur_pack)
 
-        answer = list(filter(lambda conv_case: conv_case['from'] == 'gpt', conv))[0]['value']
         if query is None or answer is None:
             bypass_pack: TorchCardiacData = self.__getitem__(idx + 1)
             if self.mode == 'train':
@@ -313,23 +188,26 @@ class CardiacDataset(Dataset):
                 tokenize=False
             )
         else:   # Following Original Med3DVLM method or maybe M3D?.
-            formatted_text = f"{question} {answer}"
+            if self.mode == 'train':
+                formatted_text = f"{question} {answer}"
+            else:
+                formatted_text = f"{question}"
         
         text_tensor = self.tokenizer(
             formatted_text,
             max_length=self.args.max_length,
             truncation=True,
             padding="max_length",
-            return_tensors="pt",
+            return_tensors="pt"
         )
 
-        input_id = text_tensor["input_ids"][0]
+        input_id = text_tensor["input_ids"][0]  # pop out batch_size axis, B x L -> L
         attention_mask = text_tensor["attention_mask"][0]
         valid_len = torch.sum(attention_mask)
+        # make sure is <eos> at ending not <pad> when actual token size < max_length
         if valid_len < len(input_id):
             input_id[valid_len] = self.tokenizer.eos_token_id
 
-        
         question_tensor = self.tokenizer(
             question,
             max_length=self.args.max_length,
@@ -341,7 +219,7 @@ class CardiacDataset(Dataset):
         question_len = torch.sum(question_tensor["attention_mask"][0])
 
         label = input_id.clone()
-        label[:question_len] = PAD_EOS_SWAP_TMP_TOKEN
+        label[:question_len] = PAD_EOS_SWAP_TMP_TOKEN   # Make <V><Q> do not be learned
         if self.tokenizer.pad_token_id == self.tokenizer.eos_token_id:
             label[label == self.tokenizer.pad_token_id] = PAD_EOS_SWAP_TMP_TOKEN
             if valid_len < len(label):
@@ -368,26 +246,9 @@ class CardiacDataset(Dataset):
             'label_file': cur_pack.get('label', 'None')
         }
 
-        
-        if hasattr(self, 'jpeg_loader'):
-            jpeg_pack = self.load_visual_pack(loader_pack, self.jpeg_loader)
-            output_pack['jpeg_image'] = jpeg_pack['image']
-            
-        # try:
-        #     visual_pack = self.image_loader(loader_pack)
-        # except Exception as e:
-        #     print(f'Image Loader raise error')
-        #     tb.print_exc()
-            
-        #     if self.mode == 'train':
-        #         return self.__getitem__(idx + 1)
-        #     visual_pack = {'image': None, 'label': None}            
-        
+        if 'image_Fg' in visual_pack:
+            output_pack['image_Fg'] = visual_pack['image_Fg']
 
-        # if visual_pack.get('label') is None and visual_pack.get('image') is not None:
-        #     visual_pack['label'] = torch.zeros_like(visual_pack['image'])
-        # elif visual_pack.get('label') is None and visual_pack.get('image') is None:
-        #     visual_pack['label'] = None
         return output_pack
 
     def __len__(self):

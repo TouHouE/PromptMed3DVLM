@@ -45,6 +45,7 @@ class PromptCLIPConfig(PretrainedConfig):
         efficient_loss: bool = False,
         vision_encoder: str = "dcformer",
         prompt_encoder: Literal['mask', 'point', 'full'] = 'mask',
+        init_lambda: tuple[float] = (.2, 1., 1.),
         **kwargs,
     ):
         self.language_model_name_or_path = language_model_name_or_path
@@ -61,6 +62,7 @@ class PromptCLIPConfig(PretrainedConfig):
         self.efficient_loss = efficient_loss
         self.vision_encoder = vision_encoder
         self.prompt_encoder = prompt_encoder
+        self.init_lambda = init_lambda
         super().__init__(**kwargs)
 
 
@@ -74,7 +76,7 @@ class PromptCLIP(PreTrainedModel):
         if config.prompt_encoder == 'mask':
             self.vision_encoder = MaskPromptDCFormer(PromptDCFormerConfig.small_config(input_size=config.input_size))
         elif config.prompt_encoder in ['point', 'full']:
-            raise NotImplementError(f'Waiting for implement...')
+            raise NotImplementedError(f'Waiting for implement...')
         else:
             raise ValueError(f"Unexpected vision encoder: {config.vision_encoder}")        
 
@@ -96,7 +98,8 @@ class PromptCLIP(PreTrainedModel):
         self.local_loss = config.local_loss
         self.gather_loss = config.gather_loss
         self.loss_type = config.loss_type
-
+        self.sim_loss = nn.KLDivLoss()
+        self.loss_adjuster = nn.Parameter(torch.zeros(3))
         if self.loss_type == "sigmoid":
             self.t_prime = nn.Parameter(torch.tensor(config.t_prime))
             self.bias = nn.Parameter(torch.tensor(config.bias))
@@ -105,9 +108,9 @@ class PromptCLIP(PreTrainedModel):
         else:
             self.logit_scale = nn.Parameter(torch.ones([]) * config.t_prime)
 
-    def encode_image(self, image, masks=None, return_dcformer=True) -> tuple[torch.Tensor, torch.Tensor]:
-        image_feats, fuse_feats = self.vision_encoder(image, masks, return_dcformer=return_dcformer)
-        
+    def encode_image(self, image, masks=None, image_fg=None, return_dcformer=True) -> tuple[torch.Tensor, torch.Tensor]:
+        fuse_feats = self.vision_encoder(image, masks)
+        image_feats = self.vision_encoder.dcformer(image_fg)
 
         if isinstance(image_feats, list):
             image_feats = image_feats[-1]
@@ -134,9 +137,19 @@ class PromptCLIP(PreTrainedModel):
 
         return text_feats
 
+    def get_lambda(self, t):
+        """
+            return: (lambda for siglip_image, lambda for siglip_fuse, lambda for alig fuse and image)
+        """
+        lambda1, lambda2, lambda3 = self.config.init_lambda
+        return lambda1, lambda2, lambda3
+
     def forward(self, images, input_ids, attention_mask, labels, **kwargs):
         masks = kwargs.pop('images')
-        image_features, fuse_features = self.encode_image(images, masks=masks, return_dcformer=True)
+        image_fg = kwargs.pop('image_fg')
+        step = kwargs.pop('step')
+        image_features, fuse_features = self.encode_image(images, masks=masks, image_fg=image_fg, return_dcformer=True)
+
         text_features = self.encode_text(input_ids, attention_mask)
 
         rank = 0
@@ -172,11 +185,11 @@ class PromptCLIP(PreTrainedModel):
                     ) * fuse_t + self.bias_fuse
                     local_logits_per_text2fuse = local_logits_per_fuse2text.T
 
-                    if rank == target_rank:
+                    if rank == target_rank: # The diagonal pair should be same (=1),
                         local_labels = 2 * torch.eye(
                             batch_size, device=device
                         ) - torch.ones(batch_size, batch_size, device=device)
-                    else:
+                    else:   # all of here should be not same (= -1)
                         local_labels = -torch.ones(
                             batch_size, batch_size, device=device
                         )
@@ -195,7 +208,9 @@ class PromptCLIP(PreTrainedModel):
                         F.logsigmoid(local_labels * local_fuse_logits)
                     ) / (batch_size * world_size)
 
-                    loss += local_loss + local_fuse_loss
+                    for cur_lambda, cur_loss in zip(self.get_lambda(step), [local_loss, local_fuse_loss, self.sim_loss(image_features, fuse_features)]):
+                        loss += cur_lambda * cur_loss
+                    # loss += local_loss + local_fuse_loss + self.sim_loss(image_features, fuse_features)
 
                 torch.distributed.nn.all_reduce(loss)
                 torch.cuda.synchronize()
@@ -232,8 +247,10 @@ class PromptCLIP(PreTrainedModel):
 
                 logits = (logits_per_image + logits_per_text) / 2.0
                 logits_fuse = (logits_per_fuse2text + logits_per_text2fuse) / 2.0
-                loss = -torch.sum(F.logsigmoid(labels * logits)) / batch_size
-                loss += -torch.sum(F.logismoid(labels * logits_fuse)) / batch_size
+                lambda_img, lambda_fuse, lambda_img_fuse = self.get_lambda(step)
+                loss = (-torch.sum(F.logsigmoid(labels * logits)) / batch_size) * lambda_img
+                loss += (-torch.sum(F.logismoid(labels * logits_fuse)) / batch_size) * lambda_fuse
+                loss += self.sim_loss(image_features, fuse_features) * lambda_img_fuse
 
         else:
             logits_per_image = (
@@ -251,8 +268,10 @@ class PromptCLIP(PreTrainedModel):
 
             logits = (logits_per_image + logits_per_text) / 2.0
             fuse_logits = (logits_per_fuse + logits_per_fuse.T) / 2.0
-            loss = -torch.sum(F.logsigmoid(logits * labels))
-            loss += -torch.sum(F.logsigmoid(fuse_logits * labels))
+            lambda_img, lambda_fuse, lambda_img_fuse = self.get_lambda(step)
+            loss = (-torch.sum(F.logsigmoid(labels * logits)) / batch_size) * lambda_img
+            loss += (-torch.sum(F.logismoid(labels * fuse_logits)) / batch_size) * lambda_fuse
+            loss += self.sim_loss(image_features, fuse_features) * lambda_img_fuse
        
 
         ret = {

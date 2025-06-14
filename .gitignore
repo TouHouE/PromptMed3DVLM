@@ -177,3 +177,8 @@ cython_debug/
 models/
 output/
 wandb/
+
+test/*
+vis_data/*
+prepare/*
+.idea/*

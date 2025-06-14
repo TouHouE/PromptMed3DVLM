@@ -41,11 +41,11 @@ deepspeed src/train/train_clip.py \
     --dataloader_pin_memory True \
     --dataloader_num_workers 8
 
-python src/eval/cardiac_eval_clip.py \
-    --model_name_or_path $output_dir \
-    --data_root $data_root \
-    --save_output True \
-    --output_dir $eval_output_dir \
-    --max_length 512 \
-    --shape_mode resize \
-    --test_size 100 150 200 250 -1
+#python src/eval/cardiac_eval_clip.py \
+#    --model_name_or_path $output_dir \
+#    --data_root $data_root \
+#    --save_output True \
+#    --output_dir $eval_output_dir \
+#    --max_length 512 \
+#    --shape_mode resize \
+#    --test_size 100 150 200 250 -1

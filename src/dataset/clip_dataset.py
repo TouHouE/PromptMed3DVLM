@@ -11,40 +11,9 @@ from torch.utils.data import Dataset
 from monai.transforms import allow_missing_keys_mode
 from monai.data import set_track_meta, MetaTensor
 
+from utils import transforms as UT
+from utils import io as UIO
 
-def load_make_sure_exists(pack):
-    possible_root = ['/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei', '/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei']
-    # public_root = ''/home/jovyan/shared/uc207pr4f57t9/cardiac/sub/taipei''
-    possible_mid_path = [
-        'to_saturn',    # for Taipei_502,
-        'to_saturn_yeh',
-        'to_saturn_beato'
-    ]
-    for public_root in possible_root:
-        for mid_path in possible_mid_path:
-            cur_abs_path = join(public_root, mid_path, pack['image'])
-            # print(f'Cur_abs_path: {cur_abs_path}')
-            if os.path.exists(cur_abs_path):
-                pack['image'] = cur_abs_path
-
-                if pack.get('label', None) is not None:
-                    buf_path = join(public_root, mid_path, pack['label'])
-                    
-                    if not os.path.exists(buf_path):
-                        pack.pop('label')
-                    else:
-                        pack['label'] = buf_path
-                return pack
-    return None
-
-
-
-
-def load_json_list(path: str) -> list[dict]:
-    with open(path, 'r') as jin:
-        if path.endswith('.jsonl'):
-            return [json.loads(line.strip('\n')) for line in jin.readlines()]
-        return json.load(jin)
 
 def custom_scale(pack):
     np.clip(pack['image'], -395.0, 842.0, out=pack['image'])
@@ -59,53 +28,29 @@ class CardiacCLIPDataset(Dataset):
         self.data_root = args.data_root
         self.tokenizer = tokenizer
         self.mode = mode
-        self.data_list = load_json_list(join(args.data_root, f'caption_{mode}.json'))
-        if getattr(args, 'ignore_split', False):
-            self.data_list.extend(load_json_list(join(args.data_root, f'caption_val.json')))
-            self.data_list.extend(load_json_list(join(args.data_root, f'caption_train.json')))
+        self.data_list = UIO.load_json(join(args.data_root, f'caption_{mode}.json'))
+        
+        if getattr(args, 'ignore_split', False) and mode == 'test':
+            self.data_list.extend(UIO.load_json(join(args.data_root, f'caption_val.json')))
+            self.data_list.extend(UIO.load_json(join(args.data_root, f'caption_train.json')))
+        elif getattr(args, 'ignore_split', False) and mode != 'train':
+            print(f'You setting `--ignore_split` to True, but mode is not train, so `--ignore_split` will be ignored.')
 
-        # self.json_file = load_json_list(args.cap_data_path)
-        # self.data_list = self.json_file[mode]
         self.contains_mask: bool = contains_mask
         load_kwargs = dict(allow_missing_keys=True)
-        # if contains_mask:
         load_kwargs['keys'] = ['image', 'label']
-        
-        if args.shape_mode == 'crop':
-            spacing = (.39, .39, .625)
-        elif args.shape_mode == 'resize':
-            spacing = (.78, .78, 1.25)
 
-        self.loader = mtf.Compose([
-            mtf.LoadImaged(**load_kwargs),
-            mtf.EnsureChannelFirstd(**load_kwargs),
-            mtf.Orientationd(axcodes='RAS', **load_kwargs),
-            mtf.Spacingd(**load_kwargs, pixdim=spacing, mode=('trilinear', 'nearest')),
-            mtf.Lambda(lambda pack: custom_scale(pack)),
-            # mtf.ScaleIntensityd(keys=['image']),
-            mtf.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), **load_kwargs)
-        ])
-
-        self.loader = mtf.Compose([
-            mtf.LoadImaged(**load_kwargs),
-            mtf.EnsureChannelFirstd(**load_kwargs),
-            mtf.Orientationd(axcodes='RAS', **load_kwargs),
-            mtf.Spacingd(**load_kwargs, pixdim=spacing, mode=('trilinear', 'nearest')),
-            mtf.Lambda(lambda pack: custom_scale(pack)),
-            # mtf.ScaleIntensityd(keys=['image']),
-            mtf.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), **load_kwargs)
-        ])
-
+        loader_comp = UT.get_fg_loader(args, dict(keys=['image', 'label'], allow_missing_keys=True))
+        self.loader = mtf.Compose(loader_comp)
         train_transform = mtf.Compose(
             [
-                # mtf.RandRotate90(prob=0.5, spatial_axes=(1, 2)),
-                mtf.RandFlipd(prob=0.10, spatial_axis=0, **load_kwargs),
-                mtf.RandFlipd(prob=0.10, spatial_axis=1, **load_kwargs),
-                mtf.RandFlipd(prob=0.10, spatial_axis=2, **load_kwargs),
-                mtf.RandScaleIntensityd(factors=0.1, prob=0.5, **load_kwargs),
-                mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, **load_kwargs),
-
-                mtf.ToTensord(dtype=torch.float, **load_kwargs),
+                mtf.RandRotate90(prob=0.5, spatial_axes=(0, 1), keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
+                mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
+                mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
+                mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
+                mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image', 'image_Fg'], allow_missing_keys=True),
+                mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image', 'image_Fg'], allow_missing_keys=True),
+                mtf.ToTensord(dtype=torch.float, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
             ]
         )
 
@@ -151,54 +96,52 @@ class CardiacCLIPDataset(Dataset):
         truncated_text = '.'.join(selected_sentences)
         return truncated_text
 
-    def __getitem__(self, idx):
-        max_attempts = 100
-        for _ in range(max_attempts):
-            try:
-                data = self.data_list[idx]
-                data = load_make_sure_exists(data)
+    def loading_visual_data(self, pack):
+        vpack = {
+            'image': pack['image']
+        }
+        if 'label' in pack:                    
+            vpack['label'] = pack['label']                
+        vpack: dict[str, MetaTensor] = self.loader(vpack)
+        vpack = self.transform(vpack)   # It must contains `image`, and possible `label`, `image_Fg`
+        return vpack
 
-                if data is None:
-                    buf_pack = self.__getitem__(random.randint(0, len(self.data_list) - 1))
-                    if self.mode != 'train':
-                        buf_pack['image'] = None                    
-                    return buf_pack
-                visual_pack = {
-                    'image': data['image']
-                }
-                if 'label' in data:                    
-                    visual_pack['label'] = data['label']                
-                image: dict[str, MetaTensor] = self.loader(visual_pack)
-                image = self.transform(image)
-                if self.mode != 'train':
-                    raw_text = data["raw_text"]                
-                else:
-                    raw_text = random.sample(data['caption'], 1)[0]['text']
-                text = self.truncate_text(raw_text, self.args.max_length)
-                text_tensor = self.tokenizer(
-                    text, max_length=self.args.max_length, truncation=True, padding="max_length", return_tensors="pt"
-                )
-                input_id = text_tensor["input_ids"][0]
-                attention_mask = text_tensor["attention_mask"][0]
+    def __getitem__(self, idx):                    
+        data = self.data_list[idx]
+        data: dict[str, str] = UIO.load_make_sure_exists(data)
 
-                ret = {
-                    'image': image['image'],
-                    'text': text,
-                    'input_id': input_id,
-                    'attention_mask': attention_mask,
-                    'question_type': "Image_text_retrieval",
-                }
-                if self.contains_mask and 'label' not in image:
-                    ret['mask'] = torch.zeros_like(ret['image'])
-                elif self.contains_mask and 'label' in image:
-                    ret['mask'] = image['label']
+        if data is None:
+            buf_pack = self.__getitem__(random.randint(0, len(self.data_list) - 1))
+            if self.mode != 'train':
+                buf_pack['image'] = None                                    
+            return buf_pack
+        
+        vpack: dict[str, torch.Tensor | MetaTensor] = self.loading_visual_data(data)
 
+        if self.mode != 'train':
+            raw_text = data["raw_text"]                
+        else:
+            raw_text = random.sample(data['caption'], 1)[0]['text']
+        text = self.truncate_text(raw_text, self.args.max_length)
+        text_tensor = self.tokenizer(
+            text, max_length=self.args.max_length, truncation=True, padding="max_length", return_tensors="pt"
+        )
+        input_id = text_tensor["input_ids"][0]
+        attention_mask = text_tensor["attention_mask"][0]
 
-                return ret
+        ret = {
+            'image': vpack['image'],
+            'text': text,
+            'input_id': input_id,
+            'attention_mask': attention_mask,
+            'question_type': "Image_text_retrieval",
+            'mask': vpack.get('label', torch.zeros_like(vpack['image']))
+        }
 
-            except Exception as e:
-                print(f"Error in __getitem__ at index {idx}: {e}")
-                idx = random.randint(0, len(self.data_list) - 1)
+        if 'image_Fg' in vpack:
+            ret['image_Fg'] = vpack['image_Fg']
+        return ret
+            
 
 
 class EXPCardiacCLIPDataset(Dataset):
@@ -207,10 +150,10 @@ class EXPCardiacCLIPDataset(Dataset):
         self.data_root = args.data_root
         self.tokenizer = tokenizer
         self.mode = mode
-        self.data_list = load_json_list(join(args.data_root, f'caption_{mode}.json'))
+        self.data_list = UIO.load_json(join(args.data_root, f'caption_{mode}.json'))
         if getattr(args, 'ignore_split', False):
-            self.data_list.extend(load_json_list(join(args.data_root, f'caption_val.json')))
-            self.data_list.extend(load_json_list(join(args.data_root, f'caption_train.json')))
+            self.data_list.extend(UIO.load_json(join(args.data_root, f'caption_val.json')))
+            self.data_list.extend(UIO.load_json(join(args.data_root, f'caption_train.json')))
 
         # self.json_file = load_json_list(args.cap_data_path)
         # self.data_list = self.json_file[mode]
@@ -225,30 +168,11 @@ class EXPCardiacCLIPDataset(Dataset):
             spacing = (.78, .78, 1.25)
         def _slicewise(pack, scaler):
             z = pack['image'].shape[-1]
-            return torc.stack([scaler(pack['image'][..., idx]) for idx in range(z)], dim=-1)
+            return torch.stack([scaler(pack['image'][..., idx]) for idx in range(z)], dim=-1)
         tojpeg = mtf.ScaleIntensity(0, 255, torch.int32)
         tonorm = mtf.ScaleIntensity()
-            
-        self.loader = mtf.Compose([
-            mtf.LoadImaged(**load_kwargs),
-            mtf.EnsureChannelFirstd(**load_kwargs),
-            mtf.Orientationd(axcodes='RAS', **load_kwargs),
-            mtf.Spacingd(**load_kwargs, pixdim=spacing, mode=('trilinear', 'nearest')),
-            mtf.Lambda(lambda pack: _slicewise(pack, tojpeg)),
-            mtf.Lambda(lambda pack: _slicewise(pack, tonorm)),
-            # mtf.ScaleIntensityd(keys=['image']),
-            mtf.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), **load_kwargs)
-        ])
+        self.loader = mtf.Compose(UT.get_normal_loader(args, keys=['image', 'label']))
 
-        self.loader = mtf.Compose([
-            mtf.LoadImaged(**load_kwargs),
-            mtf.EnsureChannelFirstd(**load_kwargs),
-            mtf.Orientationd(axcodes='RAS', **load_kwargs),
-            mtf.Spacingd(**load_kwargs, pixdim=spacing, mode=('trilinear', 'nearest')),
-            mtf.Lambda(lambda pack: custom_scale(pack)),
-            # mtf.ScaleIntensityd(keys=['image']),
-            mtf.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), **load_kwargs)
-        ])
 
         train_transform = mtf.Compose(
             [
@@ -310,7 +234,7 @@ class EXPCardiacCLIPDataset(Dataset):
         for _ in range(max_attempts):
             try:
                 data = self.data_list[idx]
-                data = load_make_sure_exists(data)
+                data = UIO.load_make_sure_exists(data)
 
                 if data is None:
                     return self.__getitem__(random.randint(0, len(self.data_list) - 1))                                

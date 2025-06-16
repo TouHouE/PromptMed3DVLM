@@ -394,7 +394,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_length', type=int, default=512)
     parser.add_argument('--data_json_path', type=str, default='/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei/gemini_split_test.json')
     parser.add_argument('--chat_mode', action='store_true', default=False)
-    parser.add_argument('--system_prompt', action='strore_true', default=False)
+    parser.add_argument('--system_prompt', action='store_true', default=False)
 
     args = parser.parse_args()
     main(args)

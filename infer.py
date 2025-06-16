@@ -224,8 +224,8 @@ def asking(
     }
 
 
-def load_data_json():
-    with open('/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei/gemini_split_test.json', 'r') as loader:
+def load_data_json(args):
+    with open(args.data_json_path, 'r') as loader:
         return json.load(loader)
 
 
@@ -255,7 +255,7 @@ def get_image_loader_from_args(args):
                      ),
             MT.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), keys=['image', 'label'], allow_missing_keys=True)
         ])
-    elif args.loader_type == 'minmax-med3d':
+    elif args.loader_type == 'minmax-med3d-zoom':
         basic.extend([
             MT.ScaleIntensityd(keys=['image'], allow_missing_keys=True),
             MT.Zoomd(zoom=0.5,
@@ -263,6 +263,12 @@ def get_image_loader_from_args(args):
                      allow_missing_keys=True
                      ),
             MT.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), keys=['image', 'label'], allow_missing_keys=True),
+        ])
+    elif args.loader_type == 'mimax-med3d-crop':
+        basic.extend([
+            MT.ScaleIntensityd(keys=['image'], allow_missing_keys=True),
+            MT.Spacingd(keys=['image', 'label'], mode=('trilinear', 'nearest'), pixdim=(.39, .39, .625), allow_missing_keys=True),
+            MT.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), keys=['image', 'label'], allow_missing_keys=True)
         ])
     elif args.loader_type == 'jpeg-med3d':
         basic.extend([
@@ -386,6 +392,7 @@ if __name__ == '__main__':
     parser.add_argument('--temp', type=float, default=0)
     parser.add_argument('--top_p', type=float, default=.9)
     parser.add_argument('--max_length', type=int, default=512)
+    parser.add_argument('--data_json_path', type=str, default='/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei/gemini_split_test.json')
 
     args = parser.parse_args()
     main(args)

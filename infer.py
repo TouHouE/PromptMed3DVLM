@@ -264,7 +264,7 @@ def get_image_loader_from_args(args):
                      ),
             MT.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), keys=['image', 'label'], allow_missing_keys=True),
         ])
-    elif args.loader_type == 'mimax-med3d-crop':
+    elif args.loader_type == 'minmax-med3d-crop':
         basic.extend([
             MT.ScaleIntensityd(keys=['image'], allow_missing_keys=True),
             MT.Spacingd(keys=['image', 'label'], mode=('trilinear', 'nearest'), pixdim=(.39, .39, .625), allow_missing_keys=True),
@@ -318,7 +318,7 @@ def main(args):
     #     MT.ToTensor(),
     # ])
     image_loader = get_image_loader_from_args(args)
-    data_list = load_data_json()
+    data_list = load_data_json(args)
     result_list = load_exists_eval(args)
     exists_pool = [(rpack['Question'], rpack['Answer']) for rpack in result_list]
     # result_pack = list()
@@ -393,6 +393,8 @@ if __name__ == '__main__':
     parser.add_argument('--top_p', type=float, default=.9)
     parser.add_argument('--max_length', type=int, default=512)
     parser.add_argument('--data_json_path', type=str, default='/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei/gemini_split_test.json')
+    parser.add_argument('--chat_mode', action='store_true', default=False)
+    parser.add_argument('--system_prompt', action='strore_true', default=False)
 
     args = parser.parse_args()
     main(args)

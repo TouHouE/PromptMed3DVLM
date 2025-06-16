@@ -1,4 +1,5 @@
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -87,7 +88,15 @@ class DataArguments:
         "help": "Apply with format: <key1>;<key2> <key3>;<key4>, the left key will be mapping to the right key in the `DataCollator`."
     })
     def __post_init__(self):
-        self.append_keys = [pair_str.split(';') for pair_str in self.append_keys]
+        _tmp_list = list()
+        for pair_str in self.append_keys:
+            if isinstance(pair_str, str):
+                _tmp_list.append(re.split(r'[,;]', pair_str))
+            else:
+                _tmp_list.append(pair_str)
+        self.append_keys = _tmp_list
+        print(_tmp_list)
+        # self.append_keys = [pair_str.split(';') for pair_str in self.append_keys]
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):

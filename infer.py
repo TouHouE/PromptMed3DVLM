@@ -24,7 +24,7 @@ bertscore = evaluate.load("bertscore")
 meteor = evaluate.load("meteor")
 rouge = evaluate.load("rouge")
 
-model: HFT.PreTsc = None
+model: HFT.AutoModelForCausalLM | VLMQwenForCausalLM = None
 tokenizer: HFT.PreTrainedTokenizer = None
 image_loader: MT.Transform = None
 convs_hist = list()

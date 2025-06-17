@@ -1,8 +1,24 @@
+import os
 from typing import Iterable, Literal
+DEBUG: bool = os.environ.get("DEBUG", "0") == "1"
+
 
 import numpy as np
 import torch
 from monai import transforms as MT
+
+
+def debug(pack):
+    print("="*30)
+    for key, value in pack.items():
+        if 'coord' in key:
+            print(value)
+        if torch.is_tensor(value) or isinstance(value, np.ndarray):
+            print(f'{key} is a tensor| shape: {value.shape}')
+            continue
+        print(f'{key} is a {type(value)}| content: {value}')
+    print("="*30)
+    return pack
 
 
 def nnunet_scaler(pack) -> dict | Iterable[float | int]:
@@ -23,11 +39,11 @@ def nnunet_scaler(pack) -> dict | Iterable[float | int]:
 
 
 def adding_new_keys(pack: dict[str, torch.Tensor]):
-    pack['image_Fg'] = pack['image'].clone()
+    pack['image_fg'] = pack['image'].clone()
     if 'label' in pack:
-        pack['mask_Fg'] = pack['label'].clone()
+        pack['mask_fg'] = pack['label'].clone()
     else:
-        pack['mask_Fg'] = None
+        pack['mask_fg'] = None
     return pack
 
 
@@ -37,26 +53,32 @@ def get_fg_loader(args) -> list[callable]:
         basically when `args.loader_type == 'unet-med3d-fgcrop' will get into here.
     """
     comp: list[callable] = [
-        MT.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
+        MT.LoadImaged(keys=['image', 'label'], allow_missing_keys=True, image_only=True),
+        MT.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cuda'),
         MT.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
-        MT.Orientationd(axcodes='RAS', keys=['image', 'label'], allow_missing_keys=True)
+        MT.Orientationd(axcodes='RAS', keys=['image', 'label'], allow_missing_keys=True),
+        MT.Spacingd(pixdim=(.39, .39, .625), keys=['image', 'label'], allow_missing_keys=True, mode=('trilinear', 'nearest'))
     ]
     comp.append(MT.Lambda(nnunet_scaler))
     comp.append(MT.Lambda(adding_new_keys))
+    if DEBUG:
+        comp.append(MT.Lambda(debug))
     comp.append(
         MT.Lambda(DummyCropForeground(
-            classes_range=[0, 10], source_key='mask_Fg', keys=['image_Fg', 'mask_Fg'], allow_missing_keys=True
+            classes_range=[0, 10], source_key='mask_fg', keys=['image_fg', 'mask_fg'], allow_missing_keys=True
         ))
     )
+    if DEBUG:
+        comp.append(MT.Lambda(debug))
     comp.append(MT.Lambda(MixedResizer(
         spatial_size=(256, 256, 128),
         padder_kwargs=dict(mode='constant', constant_values=0, method='end'),
         resizer_kwargs=dict(mode=('trilinear', 'trilinear', 'nearest'), size_mode='all'),
-        keys=['image', 'image_Fg', 'label'], allow_missing_keys=True
+        keys=['image', 'image_fg', 'label'], allow_missing_keys=True
     )))
-    comp.append(MT.DeleteItemsd(keys=['mask_Fg']))
-    comp.append(MT.ResizeWithPadOrCropd(keys=['image', 'label', 'image_Fg'], spatial_size=(256, 256, 128), allow_missing_keys=True))
-    comp.append(MT.ToTensord(keys=['image', 'label', 'image_Fg']))
+    comp.append(MT.DeleteItemsd(keys=['mask_fg']))
+    comp.append(MT.ResizeWithPadOrCropd(keys=['image', 'label', 'image_fg'], spatial_size=(256, 256, 128), allow_missing_keys=True))
+    comp.append(MT.ToTensord(keys=['image', 'label', 'image_fg']))
 
     return comp
 
@@ -93,6 +115,7 @@ def get_normal_loader(args):
 
 def get_loader(args):
     if 'fgcrop' in args.loader_type:
+        print("Choose Foreground Loader")
         return get_fg_loader(args)
     return get_normal_loader(args)
 

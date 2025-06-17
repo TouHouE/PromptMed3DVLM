@@ -247,7 +247,7 @@ class PromptCLIP(PreTrainedModel):
                 logits_fuse = (logits_per_fuse2text + logits_per_text2fuse) / 2.0
                 lambda_img, lambda_fuse, lambda_img_fuse = self.get_lambda(step)
                 loss = (-torch.sum(F.logsigmoid(labels * logits)) / batch_size) * lambda_img
-                loss += (-torch.sum(F.logismoid(labels * logits_fuse)) / batch_size) * lambda_fuse
+                loss += (-torch.sum(F.logsigmoid(labels * logits_fuse)) / batch_size) * lambda_fuse
                 loss += self.sim_loss(image_features, fuse_features) * lambda_img_fuse
 
         else:

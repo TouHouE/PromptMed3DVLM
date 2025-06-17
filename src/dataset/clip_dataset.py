@@ -1,6 +1,7 @@
 import random
 import os
 import json
+import traceback as tb
 from os.path import join
 
 import numpy as np
@@ -39,8 +40,14 @@ class CardiacCLIPDataset(Dataset):
         self.contains_mask: bool = contains_mask
         load_kwargs = dict(allow_missing_keys=True)
         load_kwargs['keys'] = ['image', 'label']
-
+        print(json.dumps(vars(args), indent=2))
         loader_comp = UT.get_loader(args)
+        self.image_checker = mtf.Compose([
+            mtf.LoadImaged(keys=['image', 'label'], allow_missing_keys=True, image_only=True),
+            mtf.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
+            mtf.Orientationd(axcodes="RAS", keys=['image', 'label'], allow_missing_keys=True),
+            mtf.Spacingd(keys=['image', 'label'], pixdim=(.39, .39, .625), mode=('trilinear', 'nearest'), allow_missing_keys=True)
+        ])
         self.loader = mtf.Compose(loader_comp)
         train_transform = mtf.Compose(
             [
@@ -104,6 +111,12 @@ class CardiacCLIPDataset(Dataset):
             vpack['label'] = pack['label']
         if 'organ' in pack:
             vpack['organ'] = pack['organ']
+        tmp_pack = self.image_checker(vpack)
+        if 'label' in tmp_pack:
+            if not all(si == sl for si, sl in zip(tmp_pack['image'].shape, tmp_pack['label'].shape)):
+                vpack.pop('label')
+                del tmp_pack
+        
         vpack: dict[str, MetaTensor] = self.loader(vpack)
         vpack = self.transform(vpack)   # It must contains `image`, and possible `label`, `image_Fg`
         return vpack
@@ -120,8 +133,15 @@ class CardiacCLIPDataset(Dataset):
             if self.mode != 'train':
                 buf_pack['image'] = None                                    
             return buf_pack
-        
-        vpack: dict[str, torch.Tensor | MetaTensor] = self.loading_visual_data(data)
+        try:
+            vpack: dict[str, torch.Tensor | MetaTensor] = self.loading_visual_data(data)
+        except Exception as e:
+            os.makedirs('./visual_error', exist_ok=True)
+            with open('./visual_error/content.txt', 'a+') as writer:
+                writer.write(tb.format_exc() + '\n')
+                writer.write("="*30 + "\n")
+            print(f'Error happen: {e.args}')
+            return self.__getitem__(idx + 1)
 
         if self.mode != 'train':
             raw_text = data["raw_text"]                
@@ -135,16 +155,16 @@ class CardiacCLIPDataset(Dataset):
         attention_mask = text_tensor["attention_mask"][0]
 
         ret = {
-            'image': vpack['image'],
+            'image': vpack['image'].cpu(),
             'text': text,
             'input_id': input_id,
             'attention_mask': attention_mask,
             'question_type': "Image_text_retrieval",
-            'mask': vpack.get('label', torch.zeros_like(vpack['image']))
+            'mask': vpack.get('label', torch.zeros_like(vpack['image'])).cpu()
         }
 
-        if 'image_Fg' in vpack:
-            ret['image_Fg'] = vpack['image_Fg']
+        if 'image_fg' in vpack:
+            ret['image_fg'] = vpack['image_fg'].cpu()
         return ret
             
 

@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -84,18 +85,17 @@ class DataArguments:
     })
     # shape_mode: str = field(default='crop')
     max_length: int = field(default=512)
-    append_keys: list[tuple[str, str]] = field(default_factory=list, metadata={
+    append_keys: Optional[str] = field(default=None, metadata={
         "help": "Apply with format: <key1>;<key2> <key3>;<key4>, the left key will be mapping to the right key in the `DataCollator`."
     })
     def __post_init__(self):
-        _tmp_list = list()
-        for pair_str in self.append_keys:
-            if isinstance(pair_str, str):
-                _tmp_list.append(re.split(r'[,;]', pair_str))
-            else:
-                _tmp_list.append(pair_str)
-        self.append_keys = _tmp_list
-        print(_tmp_list)
+        if self.append_keys is None:
+            return 
+        with open(self.append_keys, 'r') as loader:
+            self.append_keys = json.load(loader)
+        print(self.append_keys)
+        
+        
         # self.append_keys = [pair_str.split(';') for pair_str in self.append_keys]
 
 @dataclass

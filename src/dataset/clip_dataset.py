@@ -51,13 +51,14 @@ class CardiacCLIPDataset(Dataset):
         self.loader = mtf.Compose(loader_comp)
         train_transform = mtf.Compose(
             [
-                mtf.RandRotate90d(prob=0.5, spatial_axes=(0, 1), keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
-                mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
-                mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
-                mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
-                mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image', 'image_Fg'], allow_missing_keys=True),
-                mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image', 'image_Fg'], allow_missing_keys=True),
-                mtf.ToTensord(dtype=torch.float, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
+                mtf.RandRotate90d(prob=0.5, spatial_axes=(0, 1), keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
+                mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
+                mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
+                mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
+                mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image', 'image_fg'], allow_missing_keys=True),
+                mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image', 'image_fg'], allow_missing_keys=True),
+                mtf.EnsureTyped(device='cpu', keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
+                mtf.ToTensord(dtype=torch.float, keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
             ]
         )
 
@@ -111,12 +112,7 @@ class CardiacCLIPDataset(Dataset):
             vpack['label'] = pack['label']
         if 'organ' in pack:
             vpack['organ'] = pack['organ']
-        tmp_pack = self.image_checker(vpack)
-        if 'label' in tmp_pack:
-            if not all(si == sl for si, sl in zip(tmp_pack['image'].shape, tmp_pack['label'].shape)):
-                vpack.pop('label')
-                del tmp_pack
-        
+
         vpack: dict[str, MetaTensor] = self.loader(vpack)
         vpack = self.transform(vpack)   # It must contains `image`, and possible `label`, `image_Fg`
         return vpack

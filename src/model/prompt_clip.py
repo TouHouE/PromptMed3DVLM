@@ -1,4 +1,8 @@
+import os
 from typing import Literal
+DEBUG: bool = os.environ.get("DEBUG", "0") == "1"
+DLOSS: bool = os.environ.get("DLOSS", "0") == "1" or DEBUG
+
 
 import numpy as np
 import torch
@@ -98,7 +102,7 @@ class PromptCLIP(PreTrainedModel):
         self.local_loss = config.local_loss
         self.gather_loss = config.gather_loss
         self.loss_type = config.loss_type
-        self.sim_loss = nn.KLDivLoss()
+        self.sim_loss = nn.HuberLoss(reduction='none')
         self.loss_adjuster = nn.Parameter(torch.zeros(3))
         if self.loss_type == "sigmoid":
             self.t_prime = nn.Parameter(torch.tensor(config.t_prime))
@@ -111,7 +115,8 @@ class PromptCLIP(PreTrainedModel):
     def encode_image(self, image, masks=None, image_fg=None, return_dcformer=True) -> tuple[torch.Tensor, torch.Tensor]:
         fuse_feats = self.vision_encoder(image, masks)
         image_feats = self.vision_encoder.dcformer(image_fg)
-
+        limit = self.sim_loss(fuse_feats[-1], image_feats[-1])
+        
         if isinstance(image_feats, list):
             image_feats = image_feats[-1]
         image_feats = image_feats.mean(dim=1)
@@ -125,7 +130,7 @@ class PromptCLIP(PreTrainedModel):
         fuse_feats = F.normalize(fuse_feats, dim=-1)
         
 
-        return image_feats, fuse_feats
+        return image_feats, fuse_feats, limit
 
     def encode_text(self, input_id, attention_mask):
         text_feats = self.language_encoder(input_id, attention_mask=attention_mask)[
@@ -146,9 +151,26 @@ class PromptCLIP(PreTrainedModel):
 
     def forward(self, images, input_ids, attention_mask, labels, masks, image_fgs, **kwargs):
         step = kwargs.pop('step')
-        image_features, fuse_features = self.encode_image(images, masks=masks, image_fg=image_fgs, return_dcformer=True)
-
+        # Image_features: the augmentation image -> E_v(FCrop(x_i, x_p))
+        # Fuse_features: E_v(x_i) + E_p(x_p)
+        image_features, fuse_features, limit = self.encode_image(
+            images, masks=masks, image_fg=image_fgs, return_dcformer=True
+        )
         text_features = self.encode_text(input_ids, attention_mask)
+        if DLOSS:
+            print(f'Input:')
+            print(f'Image is Nan? {torch.isnan(images).any()}')
+            print(f'Mask is Nan? {torch.isnan(masks).any()}')
+            print(f'ForegroundImage is Nan? {torch.isnan(image_fgs).any()}')
+            print(f'Text is Nan? {torch.isnan(input_ids).any()}')
+            print(f'Text[attention] is nan? {torch.isnan(attention_mask).any()}')
+            
+            print(f'Features:')
+            print(f'Image is Nan? {torch.isnan(image_features).any()}')
+            print(f'Prompt is Nan? {torch.isnan(fuse_features).any()}')
+            print(f'Image is Nan? {torch.isnan(text_features).any()}')
+            
+                  
 
         rank = 0
         world_size = 1
@@ -161,6 +183,8 @@ class PromptCLIP(PreTrainedModel):
         # if self.loss_type == "sigmoid":
         if has_distributed and dist.is_initialized():
             if self.efficient_loss:
+                if DLOSS:
+                    print(f'Into efficient_loss')
                 t = torch.exp(self.t_prime)
                 fuse_t = torch.exp(self.t_prime_fuse)
                 loss = 0.0
@@ -172,7 +196,9 @@ class PromptCLIP(PreTrainedModel):
                         target_text_features = torch.distributed.nn.broadcast(
                             text_features.requires_grad_(), target_rank
                         )
-                    # Siglip with image and text
+                    if DLOSS:
+                        print(f'text is nan? {torch.isnan(target_text_features)}')
+                    # Siglip with foreground image and text
                     local_logits_per_image = (
                         image_features @ target_text_features.T
                     ) * t + self.bias
@@ -191,42 +217,59 @@ class PromptCLIP(PreTrainedModel):
                         local_labels = -torch.ones(
                             batch_size, batch_size, device=device
                         )
-
+                    # calculate Foreground Image vs Text -> The original L_Sig
                     local_logits = (
                         local_logits_per_image + local_logits_per_text
                     ) / 2.0
-                    local_loss = -torch.sum(
+                    siglip_fg = -torch.sum(
                         F.logsigmoid(local_labels * local_logits)
                     ) / (batch_size * world_size)
-
+                    
+                    # Calculate Prompt Fusion Image vs Text -> The addigional L_Sig
                     local_fuse_logits = (
                         local_logits_per_fuse2text + local_logits_per_text2fuse
                     ) / 2.0
-                    local_fuse_loss = -torch.sum(
+                    siglip_fuse = -torch.sum(
                         F.logsigmoid(local_labels * local_fuse_logits)
                     ) / (batch_size * world_size)
 
-                    for cur_lambda, cur_loss in zip(self.get_lambda(step), [local_loss, local_fuse_loss, self.sim_loss(image_features, fuse_features)]):
+                    # limit = self.sim_loss(image_features, fuse_features)
+                    if DLOSS:
+                        print(f'SigLoss[Foreground, Text]: {siglip_fg}')
+                        print(f'SigLoss[PromptFuse, Text]: {siglip_fuse}')
+                        print(f'KLDiv[Foreground, PromptFuse]: {limit.mean()}')
+                    
+                    for cur_lambda, cur_loss in zip(self.get_lambda(step), [siglip_fg, siglip_fuse, limit]):
                         loss += cur_lambda * cur_loss
                     # loss += local_loss + local_fuse_loss + self.sim_loss(image_features, fuse_features)
 
                 torch.distributed.nn.all_reduce(loss)
+                
                 torch.cuda.synchronize()
 
                 if self.training:
                     logits = 0
             else:
+                if DLOSS:
+                    print(f'Not into Efficient_Loss')
                 t = torch.exp(self.t_prime)
                 t_fuse = torch.exp(self.t_prime_fuse)
-                all_image_features, all_fuse_features, all_text_features = gather_features(
+                all_image_features, all_fuse_features, all_text_features, all_limit = gather_features(
                     image_features,
                     fuse_features,
                     text_features,
+                    limit,
                     gather_with_grad=True,
                     rank=rank,
                     world_size=world_size,
                 )
 
+                if DLOSS:
+                    print(f'Foreground Image is Nan? {torch.isnan(all_image_features).any()}')
+                    print(f'Prompt Image is Nan? {torch.isnan(all_fuse_features).any()}')
+                    print(f'Text is Nan? {torch.isnan(all_text_features).any()}')
+                    
+                
                 logits_per_image = (
                     all_image_features @ all_text_features.T
                 ) * t + self.bias
@@ -246,9 +289,18 @@ class PromptCLIP(PreTrainedModel):
                 logits = (logits_per_image + logits_per_text) / 2.0
                 logits_fuse = (logits_per_fuse2text + logits_per_text2fuse) / 2.0
                 lambda_img, lambda_fuse, lambda_img_fuse = self.get_lambda(step)
-                loss = (-torch.sum(F.logsigmoid(labels * logits)) / batch_size) * lambda_img
-                loss += (-torch.sum(F.logsigmoid(labels * logits_fuse)) / batch_size) * lambda_fuse
-                loss += self.sim_loss(image_features, fuse_features) * lambda_img_fuse
+                
+                siglip_fg = (-torch.sum(F.logsigmoid(labels * logits)) / batch_size)
+                siglip_fuse = (-torch.sum(F.logsigmoid(labels * logits_fuse)) / batch_size)
+                # limit = self.sim_loss(image_features, fuse_features)
+                limit = all_limit.mean()
+                loss = siglip_fg * lambda_img
+                loss += siglip_fuse * lambda_fuse
+                loss += limit * lambda_img_fuse
+                if DLOSS:
+                    print(f'SigLoss[Foreground, Text]: {siglip_fg}')
+                    print(f'SigLoss[PromptFuse, Text]: {siglip_fuse}')
+                    print(f'KLDiv[Foreground, PromptFuse]: {limit}')
 
         else:
             logits_per_image = (
@@ -267,14 +319,29 @@ class PromptCLIP(PreTrainedModel):
             logits = (logits_per_image + logits_per_text) / 2.0
             fuse_logits = (logits_per_fuse + logits_per_fuse.T) / 2.0
             lambda_img, lambda_fuse, lambda_img_fuse = self.get_lambda(step)
-            loss = (-torch.sum(F.logsigmoid(labels * logits)) / batch_size) * lambda_img
-            loss += (-torch.sum(F.logismoid(labels * fuse_logits)) / batch_size) * lambda_fuse
-            loss += self.sim_loss(image_features, fuse_features) * lambda_img_fuse
+
+            siglip_fg = (-torch.sum(F.logsigmoid(labels * logits)) / batch_size)
+            siglip_fuse = (-torch.sum(F.logsigmoid(labels * fuse_logits)) / batch_size)
+            # limit = self.sim_loss(image_features, fuse_features)
+            
+            loss = siglip_fg * lambda_img
+            loss += siglip_fuse * lambda_fuse
+            loss += limit * lambda_img_fuse
+            if DLOSS:
+                print(f'SigLoss[Foreground, Text]: {siglip_fg}')
+                print(f'SigLoss[PromptFuse, Text]: {siglip_fuse}')
+                print(f'KLDiv[Foreground, PromptFuse]: {limit}')
+            # loss = (-torch.sum(F.logsigmoid(labels * logits)) / batch_size) * lambda_img
+            # loss += (-torch.sum(F.logismoid(labels * fuse_logits)) / batch_size) * lambda_fuse
+            # loss += self.sim_loss(image_features, fuse_features) * lambda_img_fuse
        
 
         ret = {
             "loss": loss,
             "logits": logits,
+            "siglip_fg": siglip_fg,
+            "siglip_fuse": siglip_fuse,
+            "sim": limit
         }
 
         return ret
@@ -284,6 +351,7 @@ def gather_features(
     image_features,
     text_features,
     fuse_features,
+    limit,
     local_loss=False,
     gather_with_grad=True,
     rank=0,
@@ -294,7 +362,7 @@ def gather_features(
     ), "torch.distributed did not import correctly, please use a PyTorch version with support."
 
     if not (has_distributed and dist.is_initialized()):
-        return image_features, text_features
+        return image_features, text_features, fuse_features, limit
 
     if gather_with_grad:
         all_image_features = torch.cat(
@@ -306,6 +374,9 @@ def gather_features(
         all_fuse_features = torch.cat(
             torch.distributed.nn.all_gather(fuse_features), dim=0
         )
+        all_limit = torch.cat(
+            torch.distributed.nn.all_gather(limit), dim=0
+        )
     else:
         gathered_image_features = [
             torch.zeros_like(image_features) for _ in range(world_size)
@@ -315,21 +386,36 @@ def gather_features(
         ]
         gathered_fuse_features = [
             torch.zeros_like(fuse_features) for _ in range(world_size)
+        ]        
+        grathed_limit = [
+            torch.zeros_like(limit) for _ in range(world_size)
         ]
+        
         dist.all_gather(gathered_image_features, image_features)
         dist.all_gather(gathered_text_features, text_features)
         dist.all_gather(gathered_fuse_features, fuse_features)
-
+        dist.all_gather(gathered_limit, limit)
+        
         if not local_loss:
             gathered_image_features[rank] = image_features
             gathered_text_features[rank] = text_features
             gathered_fuse_features[rank] = fuse_features
+            gathered_limit[rank] = limit
+            
         all_image_features = torch.cat(gathered_image_features, dim=0)
         all_text_features = torch.cat(gathered_text_features, dim=0)
         all_fuse_features = torch.cat(gathered_fuse_features, dim=0)
-
-    return all_image_features, all_text_features, all_fuse_features
+        all_limit = torch.cat(gathered_limit, dim=0)
+    
+    return all_image_features, all_text_features, all_fuse_features, all_limit
 
 
 AutoConfig.register("prompt_clip", PromptCLIPConfig)
 AutoModel.register(PromptCLIPConfig, PromptCLIP)
+
+
+if __name__ == '__main__':
+    lmn = 'medicalai/ClinicalBERT'
+    cfg = PromptCLIPConfig(language_model_name_or_path=lmn)
+    model = PromptCLIP(cfg)
+    

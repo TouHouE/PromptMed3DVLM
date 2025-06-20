@@ -22,6 +22,8 @@ def debug(pack):
 
 
 def nnunet_scaler(pack) -> dict | Iterable[float | int]:
+    if DEBUG:
+        print(f'Doing nnUNet CT normalize')
     is_dict = isinstance(pack, dict)
     is_torch = torch.is_tensor(pack['image']) if is_dict else torch.is_tensor(pack)
 
@@ -39,11 +41,16 @@ def nnunet_scaler(pack) -> dict | Iterable[float | int]:
 
 
 def adding_new_keys(pack: dict[str, torch.Tensor]):
+    if DEBUG:
+        print(f'Into Adding new KEYS')
     pack['image_fg'] = pack['image'].clone()
-    if 'label' in pack:
-        pack['mask_fg'] = pack['label'].clone()
-    else:
-        pack['mask_fg'] = None
+    
+    if 'label' not in pack:
+        pack['label'] = torch.zeros_like(pack['image'])    
+    pack['mask_fg'] = pack['label'].clone()
+
+    if pack['image_fg'].shape != pack['mask_fg'].shape:
+        pack['mask_fg'] = torch.zeros_like(pack['image_fg'])
     return pack
 
 
@@ -54,7 +61,7 @@ def get_fg_loader(args) -> list[callable]:
     """
     comp: list[callable] = [
         MT.LoadImaged(keys=['image', 'label'], allow_missing_keys=True, image_only=True),
-        MT.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cuda'),
+        # MT.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cuda'),
         MT.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
         MT.Orientationd(axcodes='RAS', keys=['image', 'label'], allow_missing_keys=True),
         MT.Spacingd(pixdim=(.39, .39, .625), keys=['image', 'label'], allow_missing_keys=True, mode=('trilinear', 'nearest'))
@@ -64,20 +71,22 @@ def get_fg_loader(args) -> list[callable]:
     if DEBUG:
         comp.append(MT.Lambda(debug))
     comp.append(
-        MT.Lambda(DummyCropForeground(
+        DummyCropForeground(
             classes_range=[0, 10], source_key='mask_fg', keys=['image_fg', 'mask_fg'], allow_missing_keys=True
-        ))
+        )
     )
     if DEBUG:
         comp.append(MT.Lambda(debug))
-    comp.append(MT.Lambda(MixedResizer(
+    comp.append(MixedResizer(
         spatial_size=(256, 256, 128),
         padder_kwargs=dict(mode='constant', constant_values=0, method='end'),
         resizer_kwargs=dict(mode=('trilinear', 'trilinear', 'nearest'), size_mode='all'),
         keys=['image', 'image_fg', 'label'], allow_missing_keys=True
-    )))
+    ))
     comp.append(MT.DeleteItemsd(keys=['mask_fg']))
     comp.append(MT.ResizeWithPadOrCropd(keys=['image', 'label', 'image_fg'], spatial_size=(256, 256, 128), allow_missing_keys=True))
+    if DEBUG:
+        comp.append(MT.Lambda(debug))
     comp.append(MT.ToTensord(keys=['image', 'label', 'image_fg']))
 
     return comp
@@ -134,27 +143,31 @@ class DummyCropForeground(MT.Transform):
         if isinstance(classes_range, list):
             classes_range = range(classes_range[0], classes_range[1] + 1)
         self.cropper = MT.CropForegroundd(select_fn=select_fn, source_key=source_key, **kwargs)
-        self.rand_cropper = MT.CenterSpatialCrop(roi_size=(128, 128, 128))
+        # self.rand_cropper = MT.CenterSpatialCrop(roi_size=(128, 128, 128))
         self.source_key = source_key
         self.full_class = classes_range
 
     def __call__(self, pack: dict):
         src_k = self.source_key
 
-        if src_k not in pack:
-            pack['image_Fg'] = self.rand_cropper(pack['image_Fg'])
-
-            return pack
-
-        if 'organ' not in pack:
+        if 'organ' not in pack:            
             organ = self.full_class
         else:
             organ = pack['organ']
+        if DEBUG and 'organ' not in pack:
+            print(f"key `organ` not in input, using {self.full_class} instead")
+        if DEBUG and 'organ' in pack:
+            print(f'Organ: {pack["organ"]}')
+            
         for organ_id in organ:
             pack[src_k][pack[src_k] == organ_id] = -1
         pack[src_k][pack[src_k] > -1] = 0
         pack[src_k][pack[src_k] == -1] = 1
-        return self.cropper(pack)
+        cache_pack = self.cropper(pack)
+        
+        if 0 in cache_pack[src_k].shape:
+            return pack
+        return cache_pack
 
 
 class MixedResizer(MT.Transform):
@@ -172,8 +185,13 @@ class MixedResizer(MT.Transform):
         )
 
     def __call__(self, pack):
-        pack = self.resizer(pack)
-        return self.padder(pack)
+        try:
+            pack = self.resizer(pack)
+            return self.padder(pack)
+        except Exception as e:
+            import traceback as tb
+            tb.print_exc()
+            raise e
 
 
 class PseudoJPEGScaleIntensity:

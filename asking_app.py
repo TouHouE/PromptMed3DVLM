@@ -40,7 +40,7 @@ def load_model(dst_model_name):
 
 @torch.inference_mode()
 def asking(text, __image, temp=0, top_p=.9, max_length=512):
-    text = "<im_patch>" * 256 + text + " "
+    text = "<im_patch>" * 256 + text
     pack = tokenizer(text, return_tensors="pt")
     if isinstance(__image, str):
         __image = image_loader(__image)
@@ -80,8 +80,12 @@ backbone = [
     MT.EnsureChannelFirst(),
     MT.Orientation("RAS")
 ]
+if input("Using nnUNet CTNormalize?[Y/n]").lower() == 'y':
+    scaler = MT.Lambda(nnunet_scaler)
+else:
+    scaler = MT.ScaleIntensity()
 comp = backbone + [
-    MT.Lambda(nnunet_scaler),
+    scaler,
     MT.Zoom(0.5, mode='trilinear'),
     MT.ResizeWithPadOrCrop((256, 256, 128)),
     MT.ToTensor(),

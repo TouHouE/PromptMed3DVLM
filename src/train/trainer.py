@@ -24,12 +24,24 @@ class CLIPTrainer(Trainer):
     ):
         inputs['step'] = self.state.global_step
         outputs = model(**inputs)
+        """
+         ret = {
+            "loss": loss,
+            "logits": logits,
+            "siglip_fg": siglip_fg,
+            "siglip_fuse": siglip_fuse,
+            "sim": limit
+        }
+        """
         loss = outputs["loss"]
 
         if is_rank_zero():
             wandb.log(
                 {
                     "train/loss": loss.item(),
+                    'train/SigLIP/Foreground': outputs['siglip_fg'].item(),
+                    "train/SigLIP/Fusion": outputs['siglip_fuse'].item(),
+                    "train/similiar": outputs['sim'].item(),
                     "train/learning_rate": self.lr_scheduler.get_last_lr()[0],
                     "train/step": self.state.global_step,
                 },

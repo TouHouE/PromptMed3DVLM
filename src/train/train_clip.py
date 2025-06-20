@@ -150,8 +150,9 @@ class DataCollator:
     keys: list[str]
     dst_keys: list[str]
 
-    def __init__(self, gather_all, keys=None, mapping_keys=None, append_keys_pair: list[tuple[str, str]]=None):
+    def __init__(self, gather_all: bool, world_size: int, keys=None, mapping_keys=None, append_keys_pair: list[tuple[str, str]]=None):
         self.gather_all = gather_all
+        self.world_size = world_size
         if keys is None:
             self.keys = ["image", "mask", "text", "input_id", "attention_mask"]
         if mapping_keys is None:
@@ -187,7 +188,8 @@ class DataCollator:
 
         batch_size = return_dict['images'].shape[0]
         if self.gather_all:
-            world_size = torch.distributed.get_world_size()
+            # world_size = torch.distributed.get_world_size()
+            world_size = self.world_size
             batch_size *= world_size
 
         return_dict['labels'] = torch.arange(batch_size, device=return_dict['images'].device, dtype=torch.long)
@@ -254,7 +256,16 @@ def main():
         gather_all = True
     else:
         gather_all = False
-    data_collator = DataCollator(gather_all, append_keys_pair=data_args.append_keys)
+
+    try:
+        current_world_size = torch.distributed.get_world_size()
+        current_rank = torch.distributed.get_rank() # You might need rank for other logic, but not directly for labels here
+    except RuntimeError:
+        # Fallback for non-distributed debugging (e.g., if you ever run without deepspeed)
+        current_world_size = 1
+        current_rank = 0
+    
+    data_collator = DataCollator(gather_all, world_size=current_world_size, append_keys_pair=data_args.append_keys)
 
     compute_metrics = None
 

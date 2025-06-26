@@ -29,7 +29,9 @@ def parse_args(args=None):
     parser.add_argument(
         '--loader_type', type=str, default='unet-med3d-zoom'
     )
-
+    parser.add_argument(
+        "--input_size", type=int, nargs='+', default=(256, 256, 128), help="Input size for the model."
+    )
     parser.add_argument(
         '--ignore_split', action='store_true', default=False, help='Ignore the train-val-test split, merge all of those together.'
     )
@@ -63,7 +65,7 @@ def parse_args(args=None):
     )
     parser.add_argument("--test_topk", type=int, default=(1, 5, 10), nargs='+')
     parser.add_argument("--test_size", type=int, default=(100, 500, 1000, 2000), nargs='+')
-
+    parser.add_argument('--move_to_cuda', type=bool, default=False)
     return parser.parse_args(args)
 
 
@@ -117,7 +119,8 @@ def main():
     device = torch.device(args.device)
 
     tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name_or_path,
+        # args.model_name_or_path,
+        "medicalai/ClinicalBERT",
         model_max_length=args.max_length,
         padding_side="right",
         use_fast=False,
@@ -210,7 +213,7 @@ def main():
 
         model_name = args.model_name_or_path.split("/")[-1]
         subset_size = 'full' if args.ignore_split else 'test'
-        shape_mode = args.shape_mode
+        shape_mode = args.loader_type
         model_name = f'{subset_size}_{shape_mode}_{model_name}'
         output_path = os.path.join(args.output_dir, f"{model_name}_eval_retrieval.csv")
 

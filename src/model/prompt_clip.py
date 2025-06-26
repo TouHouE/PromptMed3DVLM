@@ -112,9 +112,34 @@ class PromptCLIP(PreTrainedModel):
         else:
             self.logit_scale = nn.Parameter(torch.ones([]) * config.t_prime)
 
-    def encode_image(self, image, masks=None, image_fg=None, return_dcformer=True) -> tuple[torch.Tensor, torch.Tensor]:
+
+    def infer_encode_image(self, image, masks, do_mask=True) -> torch.Tensor:
+        if not do_mask:
+            feats = self.vision_encoder.dcformer(image)
+            _mm_proj = self.mm_vision_proj
+        else:
+            feats = self.vision_encoder(image, masks=masks)
+            _mm_proj = self.mm_fuse_proj
+        if isinstance(feats, list):
+            feats = feats[-1]
+        feats = feats.mean(dim=1)
+        feats = _mm_proj(feats)
+        feats = F.normalize(feats, dim=-1)
+        return feats
+
+
+    def encode_image(
+            self, image, masks=None, image_fg=None, sim_loss=False, do_mask=True, **kwargs
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | torch.Tensor:
+        if masks is None:
+            masks = torch.zeros_like(image)
+        if image_fg is None:    # For inference, when only given `image` and masks
+            return self.infer_encode_image(image, masks, do_mask)
+
+
         fuse_feats = self.vision_encoder(image, masks)
         image_feats = self.vision_encoder.dcformer(image_fg)
+
         limit = self.sim_loss(fuse_feats[-1], image_feats[-1])
         
         if isinstance(image_feats, list):
@@ -128,9 +153,9 @@ class PromptCLIP(PreTrainedModel):
         fuse_feats = fuse_feats.mean(dim=1)
         fuse_feats = self.mm_fuse_proj(fuse_feats)
         fuse_feats = F.normalize(fuse_feats, dim=-1)
-        
-
-        return image_feats, fuse_feats, limit
+        if sim_loss:
+            return image_feats, fuse_feats, limit
+        return image_feats, fuse_feats
 
     def encode_text(self, input_id, attention_mask):
         text_feats = self.language_encoder(input_id, attention_mask=attention_mask)[

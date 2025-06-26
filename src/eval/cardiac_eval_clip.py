@@ -9,8 +9,9 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
-from src.dataset.clip_dataset import CLIPDataset, CardiacCLIPDataset, EXPCardiacCLIPDataset
+from src.dataset.clip_dataset import CLIPDataset, CardiacCLIPDataset, TestCardiacCLIPDataset
 from src.model.CLIP import *
+from src.model.prompt_clip import PromptCLIP
 
 
 def seed_everything(seed):
@@ -26,13 +27,17 @@ def seed_everything(seed):
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--shape_mode', type=str, default='crop', choices=['crop', 'resize']
+        '--loader_type', type=str, default='unet-med3d-zoom'
     )
+
     parser.add_argument(
-        '--ignore_split', action='store_true', default=False
+        '--ignore_split', action='store_true', default=False, help='Ignore the train-val-test split, merge all of those together.'
     )
     parser.add_argument(
         '--is_exp', action='store_true', default=False
+    )
+    parser.add_argument(
+        '--do_mask_prompt', action='store_true', default=False
     )
     parser.add_argument(
         "--model_name_or_path", type=str, default="./models/Med3DVLM-DCFormer-SigLIP"
@@ -118,7 +123,7 @@ def main():
         use_fast=False,
     )
     # try:
-    model = AutoModel.from_pretrained(args.model_name_or_path, trust_remote_code=True)
+    model: DEC_CLIP | PromptCLIP = AutoModel.from_pretrained(args.model_name_or_path, trust_remote_code=True)
     # except Exception as e:
     #     model = DEC_CLIP(DEC_CLIPConfig.from     
     model = model.to(device=device)
@@ -127,7 +132,7 @@ def main():
 
     for test_size in args.test_size:
         if args.is_exp:
-            test_dataset = EXPCardiacCLIPDataset(
+            test_dataset = TestCardiacCLIPDataset(
                 args, tokenizer=tokenizer, mode='test', test_size=test_size
             )
         else:
@@ -150,8 +155,13 @@ def main():
             input_id = sample["input_id"].to(device=device)
             attention_mask = sample["attention_mask"].to(device=device)
             image = sample["image"].to(device=device)
+            masks = sample.get('masks', torch.zeros_like(image).to(device=device))
+
             with torch.inference_mode():
-                image_features = model.encode_image(image)
+                if isinstance(model, DEC_CLIP):
+                    image_features = model.encode_image(image)
+                else:
+                    image_features = model.encode_image(image, masks=masks, do_mask=args.do_mask_prompt)
                 text_features = model.encode_text(input_id, attention_mask)
             txt_feats_all.append(text_features.detach().cpu())
             img_feats_all.append(image_features.detach().cpu())

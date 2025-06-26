@@ -3,9 +3,11 @@ import os
 import json
 import traceback as tb
 from os.path import join
+from typing import Literal
 
 import numpy as np
 import torch
+import transformers as HFT
 import monai.transforms as mtf
 import SimpleITK as sitk
 from torch.utils.data import Dataset
@@ -13,7 +15,7 @@ from monai.transforms import allow_missing_keys_mode
 from monai.data import set_track_meta, MetaTensor
 
 from src.dataset.utils import transforms as UT
-from src.dataset.utils import io as UIO
+from src.dataset.utils import myio as UIO
 
 
 def custom_scale(pack):
@@ -24,7 +26,35 @@ def custom_scale(pack):
 
 
 class CardiacCLIPDataset(Dataset):
-    def __init__(self, args, tokenizer, mode="train", test_size=1000, contains_mask=False):
+    # def __init__(self, args, tokenizer, mode: Literal['train', 'val', 'test']="train", test_size=1000, contains_mask=False):
+
+
+    def __init__(
+            self, args, tokenizer: HFT.PreTrainedTokenizer,
+            mode: Literal['train', 'val', 'test']="train", test_size=1000
+    ):
+        """
+        Initializes the CardiacCLIPDataset with the given parameters.
+
+        Args:
+            args: A namespace containing various attributes required for dataset configuration.
+                - data_root: The root directory for data storage.
+                - ignore_split: A boolean flag to ignore the split of training and validation data.
+                - max_length: The maximum length of captions.
+                - loader_type: Use to decision how preprocessor to use.
+            tokenizer: A tokenizer to process textual data.
+            mode (Literal['train', 'val', 'test']): Mode of operation, determines data loading and transformations. Defaults to 'train'.
+            test_size (int): Number of samples to limit the dataset to in test mode. Defaults to 1000.
+
+        Attributes:
+            args: Stores the input arguments.
+            data_root: The root directory for data storage, derived from args.
+            tokenizer: Stores the input tokenizer.
+            mode: Stores the mode of operation.
+            data_list: List of data entries loaded from JSON files based on the mode.
+            loader: Composed data loading pipeline using MONAI transforms.
+            transform: Data transformation pipeline for training or validation based on the mode.
+        """
         self.args = args
         self.data_root = args.data_root
         self.tokenizer = tokenizer
@@ -37,9 +67,6 @@ class CardiacCLIPDataset(Dataset):
         elif getattr(args, 'ignore_split', False) and mode != 'train':
             print(f'You setting `--ignore_split` to True, but mode is not train, so `--ignore_split` will be ignored.')
 
-        self.contains_mask: bool = contains_mask
-        load_kwargs = dict(allow_missing_keys=True)
-        load_kwargs['keys'] = ['image', 'label']
         print(json.dumps(vars(args), indent=2))
         loader_comp = UT.get_loader(args)
 
@@ -57,7 +84,7 @@ class CardiacCLIPDataset(Dataset):
             ]
         )
 
-        val_transform = mtf.Compose([mtf.ToTensord(dtype=torch.float, **load_kwargs)])
+        val_transform = mtf.Compose([mtf.ToTensord(dtype=torch.float, keys=['image', 'label', 'image_fg'], allow_missing_keys=True)])
         
         if mode == 'train':
             self.transform = train_transform
@@ -72,6 +99,18 @@ class CardiacCLIPDataset(Dataset):
         return len(self.data_list)
 
     def truncate_text(self, input_text, max_tokens):
+        """
+        Truncate a given text to a given number of tokens.
+
+        This function splits the input text into sentences, and then randomly selects sentences until the desired number of tokens is reached.
+
+        Args:
+            input_text (str): The text to be truncated.
+            max_tokens (int): The maximum number of tokens to be kept.
+
+        Returns:
+            str: The truncated text.
+        """
         def count_tokens(text):
             tokens = self.tokenizer.encode(text, add_special_tokens=True)
             return len(tokens)
@@ -160,7 +199,7 @@ class CardiacCLIPDataset(Dataset):
             
 
 
-class EXPCardiacCLIPDataset(Dataset):
+class TestCardiacCLIPDataset(Dataset):
     def __init__(self, args, tokenizer, mode="train", test_size=1000, contains_mask=False):
         self.args = args
         self.data_root = args.data_root

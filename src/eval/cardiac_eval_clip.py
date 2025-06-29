@@ -2,6 +2,7 @@ import argparse
 import csv
 import os
 import random
+from os.path import join, exists
 
 import numpy as np
 import torch
@@ -44,6 +45,7 @@ def parse_args(args=None):
     parser.add_argument(
         "--model_name_or_path", type=str, default="./models/Med3DVLM-DCFormer-SigLIP"
     )
+    parser.add_argument("--desc", type=str, default="")
     parser.add_argument("--max_length", type=int, default=512)
     parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
 
@@ -215,7 +217,14 @@ def main():
         subset_size = 'full' if args.ignore_split else 'test'
         shape_mode = args.loader_type
         model_name = f'{subset_size}_{shape_mode}_{model_name}'
-        output_path = os.path.join(args.output_dir, f"{model_name}_eval_retrieval.csv")
+        desc = f"_{args.desc}" if getattr(args, "desc", None) else ""        
+        output_path = join(args.output_dir, f"{model_name}{desc}_eval_retrieval.csv")
+        if exists(output_path):
+            print(f"Eval results file already exists: {output_path}")
+            do_rename = input(f'Do want to rename?[Y/n]').lower()
+            if do_rename == 'y':
+                output_path = input("New path >>> ")
+
 
         with open(output_path, mode="w") as outfile:
             writer = csv.writer(outfile)

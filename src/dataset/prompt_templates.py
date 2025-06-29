@@ -183,7 +183,7 @@ PosREC_templates = {
     "Sorry, no {} found.",
     "No {} visible.",
     "Not seeing {} here.",
-    "{} absent.",
+    # "{} absent.",
     "No {} detected.",
     "Can't find {} in this image.",
 ],
@@ -445,4 +445,18 @@ Seg_templates = {
     "This seems to be {}, but it's not depicted here.",
     "While this describes {}, it's not shown in this image.",
 ]
+}
+
+
+CardiacMap = {
+    1: "Right Atrium",
+    2: "Right Ventricle",
+    3: "Left Atrium",
+    4: "Left Ventricle",
+    5: "MyocardiumLV",
+    6: "Aorta",
+    7: "Coronary Arteries",
+    8: "Fat",
+    9: "Bypass",
+    10:"Plaque"
 }

@@ -31,6 +31,9 @@ def parse_args(args=None):
         '--loader_type', type=str, default='unet-med3d-zoom'
     )
     parser.add_argument(
+        '--ds_type', type=str, default='cardiac'
+    )
+    parser.add_argument(
         "--input_size", type=int, nargs='+', default=(256, 256, 128), help="Input size for the model."
     )
     parser.add_argument(
@@ -52,7 +55,7 @@ def parse_args(args=None):
     # data
     parser.add_argument("--data_root", type=str, default="./data/")
     parser.add_argument(
-        "--cap_data_path", type=str, default="./data/M3D_Cap_npy/M3D_Cap.json"
+        "--cap_data_path", type=str, default=None
     )
     parser.add_argument("--output_dir", type=str, default="./output/eval/")
     parser.add_argument("--save_output", type=bool, default=False)
@@ -131,18 +134,25 @@ def main():
     model: DEC_CLIP | PromptCLIP = AutoModel.from_pretrained(args.model_name_or_path, trust_remote_code=True)
     # except Exception as e:
     #     model = DEC_CLIP(DEC_CLIPConfig.from     
-    model = model.to(device=device)
+    model = model.to(device=device).eval()
 
     results = {}
 
     for test_size in args.test_size:
-        if args.is_exp:
+        
+        if args.is_exp and args.ds_type == 'cardiac':
             test_dataset = TestCardiacCLIPDataset(
                 args, tokenizer=tokenizer, mode='test', test_size=test_size
             )
-        else:
+        elif not args.is_exp and args.ds_type == 'cardiac':
+            print(f'Declare a `CardiacCLIPDataset for `--ds_type` setting as `cardiac`')
             test_dataset = CardiacCLIPDataset(
                 args, tokenizer=tokenizer, mode="test", test_size=test_size
+            )
+        elif args.ds_type == 'm3d':
+            print(f'Declare a `CLIPDataset` for `--ds_type` == "m3d"')
+            test_dataset = CLIPDataset(
+                args, tokenizer=tokenizer, mode='test', test_size=test_size
             )
 
         test_dataloader = DataLoader(

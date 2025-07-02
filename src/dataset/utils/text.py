@@ -41,8 +41,11 @@ def preprocess(
     sources,
     tokenizer: HFT.PreTrainedTokenizer,
     max_len: int,
-    system_message: str = "You are a helpful assistant."
+    image_tokens: str,
+    system_message: str = "You are a helpful assistant.",    
 ) -> dict:
+    if not isinstance(sources[0], list):
+        sources = [sources]
     roles = {"user": "<|im_start|>user", "assistant": "<|im_start|>assistant"}
     im_map = get_im_start_end(tokenizer)
     im_start = im_map['im_start']
@@ -55,7 +58,7 @@ def preprocess(
     # Apply prompt templates
     input_ids, targets = [], []
     for i, source in enumerate(sources):
-        if roles[source[0]["from"]] != roles["user"]:
+        if roles[source[0]["role"]] != roles["user"]:
             source = source[1:]
 
         input_id, target = [], []
@@ -71,13 +74,13 @@ def preprocess(
         assert len(input_id) == len(target)
         image_token_is_added = False
         for j, sentence in enumerate(source):
-            role = roles[sentence["from"]]
+            role = roles[sentence["role"]]
             if sentence['role'] == 'user' and not image_token_is_added:
-                sentence['value'] = '<im_patch>' * 256 + "\n" + sentence['value']
+                sentence['content'] = image_tokens + "\n" + sentence['content']
             _input_id = tokenizer(role).input_ids + nl_tokens + \
-                tokenizer(sentence["value"]).input_ids + [im_end] + nl_tokens
+                tokenizer(sentence["content"]).input_ids + [im_end] + nl_tokens
             input_id += _input_id
-            print(f"role: {role}")
+            # print(f"role: {role}")
             if role == '<|im_start|>user':
                 _target = [im_start] + [IGNORE_TOKEN_ID] * (len(_input_id)-3) + [im_end] + nl_tokens
             elif role == '<|im_start|>assistant':

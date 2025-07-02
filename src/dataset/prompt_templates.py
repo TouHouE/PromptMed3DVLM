@@ -43,6 +43,13 @@ Caption_templates = [
             "Can you provide a diagnosis based on this image?",
 ]
 
+Caption_style = [
+    'in the style of a {}.',
+    'presented as a {}.',
+    'rendered as a {}.',
+    'replied in a {}.'
+]
+
 
 PosREC_templates = {
 "cls_questions": [

@@ -48,7 +48,7 @@ def parse_args(args=None):
         ),  # ("recall", "precision", "f1_score", "accuracy")
     )
     parser.add_argument("--test_topk", type=tuple, default=(1, 5, 10))
-    parser.add_argument("--test_size", type=tuple, default=(100, 500, 1000, 2000))
+    parser.add_argument("--test_size", type=int, nargs="+", default=(100, 500, 1000, 2000))
 
     return parser.parse_args(args)
 

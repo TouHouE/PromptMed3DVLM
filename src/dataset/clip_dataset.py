@@ -13,6 +13,7 @@ import SimpleITK as sitk
 from torch.utils.data import Dataset
 from monai.transforms import allow_missing_keys_mode
 from monai.data import set_track_meta, MetaTensor
+from einops import rearrange
 
 from src.dataset.utils import transforms as UT
 from src.dataset.utils import myio as UIO
@@ -174,10 +175,14 @@ class CardiacCLIPDataset(Dataset):
             return self.__getitem__(idx + 1)
 
         if self.mode != 'train':
-            raw_text = data["raw_text"]                
+            raw_text = data["raw_text"]  
+            # raw_text = list(filter(lambda pack: pack['style'] == 'Concise Summary', data['caption']))[0]['text']
+            
         else:
             raw_text = random.sample(data['caption'], 1)[0]['text']
         text = self.truncate_text(raw_text, self.args.max_length)
+        # print(f'Text:\n{text}')
+
         text_tensor = self.tokenizer(
             text, max_length=self.args.max_length, truncation=True, padding="max_length", return_tensors="pt"
         )
@@ -334,6 +339,10 @@ class TestCardiacCLIPDataset(Dataset):
 
 class CLIPDataset(Dataset):
     def __init__(self, args, tokenizer, mode="train", test_size=1000):
+        if getattr(args, 'cap_data_path', None) is None:
+            print("Setting M3D-caption needed ")
+            args.cap_data_path = '/home/jovyan/shared/uc207pr4f57t9/cardiac/M3D/M3D-Cap/M3D_Cap/M3D_Cap_nii.json'
+            args.data_root = '/home/jovyan/shared/uc207pr4f57t9/cardiac/M3D/M3D-Cap'
         self.args = args
         self.data_root = args.data_root
         self.tokenizer = tokenizer
@@ -412,6 +421,7 @@ class CLIPDataset(Dataset):
             try:
                 data = self.data_list[idx]
                 image_path = data["image"]
+                image_path = image_path.replace(".npy", '.nii.gz')
                 image_abs_path = os.path.join(self.data_root, image_path)
 
                 # image = np.load(image_abs_path)  # nomalized 0-1, C,D,H,W
@@ -433,6 +443,7 @@ class CLIPDataset(Dataset):
 
                 input_id = text_tensor["input_ids"][0]
                 attention_mask = text_tensor["attention_mask"][0]
+                image = rearrange(image, 'C D H W -> C H W D')
 
                 ret = {
                     'image': image,

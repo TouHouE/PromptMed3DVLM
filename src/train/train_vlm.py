@@ -143,7 +143,8 @@ class ModelArguments:
 
 @dataclass
 class DataArguments:
-    shape_mode: str = field(default='resize')
+    # shape_mode: str = field(default='resize')
+    loader_type: str = field(default='unet-med3d-resize')
     dataset_scale: str = field(default='full', metadata={'help': 'Now can apply "full" and "d10"'})
     is_promptsubset: bool = field(default=False)
     data_root: str = field(

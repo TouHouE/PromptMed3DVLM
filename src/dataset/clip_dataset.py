@@ -175,14 +175,10 @@ class CardiacCLIPDataset(Dataset):
             return self.__getitem__(idx + 1)
 
         if self.mode != 'train':
-            raw_text = data["raw_text"]  
-            # raw_text = list(filter(lambda pack: pack['style'] == 'Concise Summary', data['caption']))[0]['text']
-            
+            raw_text = data["raw_text"]                
         else:
             raw_text = random.sample(data['caption'], 1)[0]['text']
         text = self.truncate_text(raw_text, self.args.max_length)
-        # print(f'Text:\n{text}')
-
         text_tensor = self.tokenizer(
             text, max_length=self.args.max_length, truncation=True, padding="max_length", return_tensors="pt"
         )
@@ -443,6 +439,7 @@ class CLIPDataset(Dataset):
 
                 input_id = text_tensor["input_ids"][0]
                 attention_mask = text_tensor["attention_mask"][0]
+                # I change model axis defination
                 image = rearrange(image, 'C D H W -> C H W D')
 
                 ret = {

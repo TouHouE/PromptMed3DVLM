@@ -27,8 +27,8 @@ import pandas as pd
 from monai.data import set_track_meta, MetaTensor
 from torch.utils.data import Dataset, ConcatDataset
 from src.dataset.prompt_templates import Caption_templates
-from utils import io as UIO
-from utils import transforms as UT
+from src.dataset.utils import myio as UIO
+from src.dataset.utils import transforms as UT
 
 # Start Define Custom TypeHint
 UserType = Literal['human', 'user']
@@ -54,23 +54,24 @@ def get_prompt() -> str:
 
 def get_image_loader(args, mode='train') -> mtf.Transform:
     load_kwargs = dict(keys=['image', 'label'], allow_missing_keys=True)
-    if 'fgcrop' in args.loader_type:
-        stem = UT.get_fg_loader(args, load_kwargs=load_kwargs)
-    else:
-        stem = UT.get_normal_loader(args, load_kwargs=load_kwargs)
+    stem = UT.get_loader(args)
+    # if 'fgcrop' in args.loader_type:
+    #     stem = UT.get_fg_loader(args, load_kwargs=load_kwargs)
+    # else:
+    #     stem = UT.get_normal_loader(args, load_kwargs=load_kwargs)
 
     if mode == 'train': # Adding some random shit
         stem.extend([                                             
 
-            mtf.RandRotate90d(prob=0.5, spatial_axes=(0, 1), keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
-            mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
-            mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
-            mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True),
-            mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image', 'image_Fg'], allow_missing_keys=True),
-            mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image', 'image_Fg'], allow_missing_keys=True),
+            mtf.RandRotate90d(prob=0.5, spatial_axes=(0, 1), keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
+            mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
+            mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
+            mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
+            mtf.RandScaleIntensityd(factors=0.1, prob=0.5, keys=['image', 'image_fg'], allow_missing_keys=True),
+            mtf.RandShiftIntensityd(offsets=0.1, prob=0.5, keys=['image', 'image_fg'], allow_missing_keys=True),
         ])
 
-    stem.append(mtf.ToTensord(dtype=torch.float, keys=['image', 'label', 'image_Fg'], allow_missing_keys=True))
+    stem.append(mtf.ToTensord(dtype=torch.float, keys=['image', 'label', 'image_fg'], allow_missing_keys=True))
     
     return mtf.Compose(stem)
 
@@ -91,7 +92,7 @@ class CardiacDataset(Dataset):
         self.image_tokens = '<im_patch>' * args.proj_out_num
         self.data_list = list()
         all_pack = UIO.load_json(join(self.public_root, f'gemini_split_{mode}.json'))
-        all_pack.extend(UIO.load_json(join(self.public_root, "caption_train.json")))
+        # all_pack.extend(UIO.load_json(join(self.public_root, "caption_train.json")))
         
         if getattr(args, 'is_promptsubset', False):
             print(f'`--is_promptsubset` is set')
@@ -246,8 +247,8 @@ class CardiacDataset(Dataset):
             'label_file': cur_pack.get('label', 'None')
         }
 
-        if 'image_Fg' in visual_pack:
-            output_pack['image_Fg'] = visual_pack['image_Fg']
+        if 'image_fg' in visual_pack:
+            output_pack['image_fg'] = visual_pack['image_fg']
 
         return output_pack
 

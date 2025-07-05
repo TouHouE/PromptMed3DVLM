@@ -104,10 +104,10 @@ def get_normal_loader(args):
         scaler = MT.ScaleIntensityd(keys=['image'])
     else:
         raise NotImplementedError(f"Unexpected scaler type: {scaler_type}")
-    device = 'cuda' if getattr(args, "move_to_cuda", True) else 'cpu'
+    device = 'cuda' if getattr(args, "move_to_cuda", False) else 'cpu'
     stem = [
         MT.LoadImaged(keys=['image', 'label'], allow_missing_keys=True),
-        MT.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device=device),
+        MT.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device=device), 
         MT.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
         MT.Orientationd(axcodes="RAS", keys=['image', 'label'], allow_missing_keys=True),
         scaler
@@ -116,7 +116,7 @@ def get_normal_loader(args):
     if model_arch_type == 'm3d':
         stem.append(MT.Orientationd(axcodes="SRA", keys=['image', 'label'], allow_missing_keys=True))
         input_size = (32, 256, 256)
-    if shape_type == 'resize':
+    if shape_type in ['resize', 'zoom']:
         stem.append(MT.Zoomd(zoom=.5, mode=('trilinear', 'nearest'), keys=['image', 'label'], allow_missing_keys=True))
     stem.append(MT.ResizeWithPadOrCropd(spatial_size=input_size, keys=['image', 'label'], allow_missing_keys=True))
     stem.append(MT.ToTensord(keys=['image', 'label'], allow_missing_keys=True))

@@ -1,5 +1,5 @@
 import os
-os.environ['HF_HOME'] = r"D:\huggingface"
+# os.environ['HF_HOME'] = r"D:\huggingface"
 import torch
 import transformers as HFT
 IGNORE_TOKEN_ID = -100
@@ -15,14 +15,49 @@ def get_mask(image_path: str) -> torch.Tensor:
     """
 
 
-def making_textual_input_label(fully_chat, tokenizer: HFT.PreTrainedTokenizer, args):
-    while fully_chat[-1]['role'] != 'assistant':
-        fully_chat.pop(-1)
+def making_textual_input_label(sources, tokenizer: HFT.PreTrainedTokenizer, max_len, image_tokens, **kwargs):
+    if isinstance(sources[0], list):
+        sources = sources[0]
+    question = sources[0]['content']
+    answer = sources[1]['content']
+    question = image_tokens + " " + question
+    text_tensor = tokenizer(
+        question + " " + answer,
+        max_length=max_len,
+        truncation=True,
+        padding="max_length",
+        return_tensors="pt",
+    )
 
-    fully_content = tokenizer.apply_chat_template(fully_chat, add_generation_prompt=False, tokenize=False)
-    prompts = tokenizer.apply_chat_template(fully_chat[:-1], add_generation_prompt=True, tokenize=False)
-    fully_content_ids = tokenizer(fully_content, return_tensors='pt')
-    prompt_ids = tokenizer(prompts, return_tensors='pt')
+    input_id = text_tensor["input_ids"][0]
+    attention_mask = text_tensor["attention_mask"][0]
+
+    valid_len = torch.sum(attention_mask)
+    if valid_len < len(input_id):
+        input_id[valid_len] = tokenizer.eos_token_id
+
+    question_tensor = tokenizer(
+        question,
+        max_length=max_len,
+        truncation=True,
+        padding="max_length",
+        return_tensors="pt",
+    )
+    question_len = torch.sum(question_tensor["attention_mask"][0])
+
+    label = input_id.clone()
+    label[:question_len] = IGNORE_TOKEN_ID
+    if tokenizer.pad_token_id == tokenizer.eos_token_id:
+        label[label == tokenizer.pad_token_id] = IGNORE_TOKEN_ID
+        if valid_len < len(label):
+            label[valid_len] = tokenizer.eos_token_id
+    else:
+        label[label == tokenizer.pad_token_id] = IGNORE_TOKEN_ID
+    return {
+        'input_ids': input_id[None],
+        'attention_mask': attention_mask[None],
+        'labels': label[None]
+    }
 
 def get_im_start_end(tokenizer):
     if (im_start := getattr(tokenizer, 'im_start_id', None)) is None:
@@ -37,12 +72,12 @@ def get_im_start_end(tokenizer):
 
 
 
-def preprocess(
+def qwen_preprocess(
     sources,
     tokenizer: HFT.PreTrainedTokenizer,
     max_len: int,
     image_tokens: str,
-    system_message: str = "You are a helpful assistant.",    
+    system_message: str = "You are a helpful assistant.", **kwargs  
 ) -> dict:
     if not isinstance(sources[0], list):
         sources = [sources]
@@ -95,13 +130,50 @@ def preprocess(
         input_ids.append(input_id[:max_len])
         targets.append(target[:max_len])
     input_ids = torch.tensor(input_ids, dtype=torch.int)
-    targets = torch.tensor(targets, dtype=torch.int)
+    targets = torch.tensor(targets, dtype=torch.long)
 
     return dict(
         input_ids=input_ids,
         labels=targets,
         attention_mask=input_ids.ne(tokenizer.pad_token_id),
     )
+
+
+def preprocess(
+    sources,
+    tokenizer: HFT.PreTrainedTokenizer,
+    max_len: int, 
+    image_tokens: str,
+    args, **kwargs
+):
+    if getattr(args, 'chat_mode', True):        
+        return qwen_preprocess(
+            sources, tokenizer, max_len, image_tokens, **kwargs
+        )
+    return making_textual_input_label(
+        sources, tokenizer, max_len, image_tokens
+    )
+
+def show_debug_pack(pack, tokenizer):
+    for key, value in pack.items():
+        print(f'{key} -> {value.shape}')
+    for loc, (token, lab_token, attn) in enumerate(zip(pack['input_ids'][0], pack['labels'][0], pack['attention_mask'][0])):
+        # print(token)
+        # print(tokenizer("<|endoftext|>")['input_ids'])
+        # break
+        if token >= 0:            
+            token = tokenizer.decode(token)
+            if '\n' in token:
+                token = token.replace("\n", "\\n")            
+            if ' ' in token:
+                token = token.replace(" ", "[sp]")
+        if lab_token > 0:
+            lab_token = tokenizer.decode(lab_token)
+            if '\n' in lab_token:
+                lab_token = lab_token.replace('\n', '\\n')
+            if ' ' in lab_token:
+                lab_token = lab_token.replace(" ", '[sp]')
+        print(f'[{loc:03}]|{token:15}:{attn}:{lab_token}')
 
 
 def random_text():
@@ -111,11 +183,48 @@ def random_text():
 
 if __name__ == '__main__':
     tokenizer = HFT.AutoTokenizer.from_pretrained(r"MagicXin/Med3DVLM-Qwen-2.5-7B")
+    tokenizer.add_tokens("<|nvis_data_sep|>")    
     chat = [
-        {'from': 'user', 'value': 'What organ in <box_start>0.1, 0.5, 0.1, 0.5, 0.75, 0.9<box_end>?'},
-        {"from": "assistant", "value": "Left ventricle."},
-        {"from": 'user', 'value': 'What is its volume in cubic centimeters?'},
-        {"from": 'assistant', "value": "<tool_call>\n\{\"name\":\"get_mask\", \"arguments\": {\"image_path\": \"./cache_dir/current_image.nii.gz\"}}\n"}
+        {'role': 'user', 'content': 'Based on provided data:\nA 66 year old female.<|nvis_data_sep|>Were are the LV?'},
+        {"role": "assistant", "content": "Left ventricle located at <|box_start|>0.1, 0.5, 0.1, 0.5, 0.75, 0.9<|box_end|>."},
+        # {"role": 'user', 'content': 'What is its volume in cubic centimeters?'},
+        # {"role": 'assistant', "content": "<tool_call>\n\{\"name\":\"get_mask\", \"arguments\": {\"image_path\": \"./cache_dir/current_image.nii.gz\"}}\n"}
     ]
-    out = preprocess([chat], tokenizer, 1024)
-    breakpoint()
+    class DYM(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embed = nn.Embeddings(len(tokenizer), 128)
+            self.lm_head = nn.Linear(128, len(tokenizer), bias=False)
+        def forward(self, inputs):
+            emb = self.embed(inputs)
+            return self.lm_head(emb)
+
+
+    out = making_textual_input_label([chat], tokenizer, 1024, image_tokens="<im_patch>" * 1)
+    out = preprocess([chat], tokenizer, 768, image_tokens="<im_patch>" * 256)
+    show_debug_pack(out, tokenizer)
+
+    # for key, value in out.items():
+    #     print(f'{key} -> {value.shape}')
+
+    # for loc, (token, lab_token, attn) in enumerate(zip(out['input_ids'][0], out['labels'][0], out['attention_mask'][0])):
+    #     # print(token)
+    #     # print(tokenizer("<|endoftext|>")['input_ids'])
+    #     # break
+    #     if token < 0 or token == tokenizer("<|endoftext|>")['input_ids'][0]:
+    #         continue
+    #     text = tokenizer.decode(token)
+    #     if '\n' in text:
+    #         text = text.replace("\n", "\\n")            
+    #     if ' ' in text:
+    #         text = text.replace(" ", "[sp]")
+    #     if lab_token > 0:
+    #         lab_token = tokenizer.decode(lab_token)
+    #         if '\n' in lab_token:
+    #             lab_token = lab_token.replace('\n', '\\n')
+    #         if ' ' in lab_token:
+    #             lab_token = lab_token.replace(" ", '[sp]')
+    #     print(f'[{loc:03}]|{text:15}:{attn}:{lab_token}')
+
+    
+    # breakpoint()

@@ -130,9 +130,9 @@ def main():
         padding_side="right",
         use_fast=False,
     )
-
+    old_vocab_size = len(tokenizer)
     # Define and add special tokens
-    special_token = {"additional_special_tokens": ["<im_patch>"]}
+    special_token = {"additional_special_tokens": ["<im_patch>", "<|nvis_data_sep|>"]}
     tokenizer.add_special_tokens(special_token)
 
     if tokenizer.unk_token is not None and tokenizer.pad_token is None:
@@ -141,7 +141,8 @@ def main():
     # Convert special tokens to token IDs and set related arguments
     model_args.img_token_id = tokenizer.convert_tokens_to_ids("<im_patch>")
     model_args.vocab_size = len(tokenizer)
-    print("vocab_size: ", model_args.vocab_size)
+    print(f'Old Vocab Size(tokenizer): {old_vocab_size}')
+    print(f"Newest vocab_size(tokenizer): ", model_args.vocab_size)
 
     print("Model preparation")
 
@@ -165,7 +166,7 @@ def main():
     if model_args.vision_tower is not None:
         model.get_model().initialize_vision_modules(model_args=model_args)
 
-    model_args.num_new_tokens = 1
+    model_args.num_new_tokens = len(special_token['additional_special_tokens'])
     model.initialize_vision_tokenizer(model_args, tokenizer)
 
     if training_args.lora_enable:
@@ -185,8 +186,15 @@ def main():
 
     print("Load weights with LoRA")
     state_dict = torch.load(model_args.model_with_lora, map_location="cpu")
+    cancel_original_module_state_dict = {k: v for k, v in state_dict.items() if 'original_module' not in k}
+    rename_modules_to_save_state_dict = {
+        k.replace('modules_to_save.default.', ''): v for k, v in cancel_original_module_state_dict.items()
+    }
 
-    model.load_state_dict(state_dict, strict=True)
+    try:
+        model.load_state_dict(state_dict, strict=True)
+    except Exception as e:
+        breakpoint()
 
     print("Merge weights with LoRA")
     model = model.merge_and_unload()

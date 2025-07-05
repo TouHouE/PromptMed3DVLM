@@ -11,6 +11,7 @@ from transformers import AutoTokenizer, LlamaForCausalLM
 
 import wandb
 from src.dataset.mllm_dataset import CapDataset, TextDatasets, TextYNDatasets, CardiacDataset
+from src.dataset.cardiac_dataset import Stage_0_1_Dataset, Stage2Dataset
 from src.model.llm.qwen import VLMQwenForCausalLM
 from src.model.encoder.prompt_dcformer import PromptDCFormerConfig
 from src.train.trainer import MLLMTrainer
@@ -145,8 +146,13 @@ class ModelArguments:
 class DataArguments:
     # shape_mode: str = field(default='resize')
     loader_type: str = field(default='unet-med3d-resize')
+    dataset_src: str = field(default='mllm')
+    dataset_stage: str = field(default='stage2')
     dataset_scale: str = field(default='full', metadata={'help': 'Now can apply "full" and "d10"'})
+    dataset_version: str = field(default='v2')
+    chat_mode: bool = field(default=True)
     is_promptsubset: bool = field(default=False)
+    move_to_cuda: bool = field(default=False, metadata={'help': 'Setting monai.transforms.EnsureType to cuda(True) or cpu(False)'})
     data_root: str = field(
         default="./data/", metadata={"help": "Root directory for all data."}
     )
@@ -413,7 +419,7 @@ class DataCollator:
         # images = torch.cat([_.unsqueeze(0) for _ in images], dim=0)
         images = torch.stack(images, dim=0)
         input_ids = torch.stack(input_ids, dim=0)
-        labels = torch.stack(labels, dim=0)
+        labels = torch.stack(labels, dim=0).long()
         attention_mask = torch.stack(attention_mask, dim=0)
         masks = torch.stack(masks, dim=0)
         # input_ids = torch.cat([_.unsqueeze(0) for _ in input_ids], dim=0)
@@ -428,7 +434,8 @@ class DataCollator:
             labels=labels,
             attention_mask=attention_mask,
         )
-
+        # for key, value in return_dict.items():
+        #     print(f'{key}|{value.shape}|Dtype: {value.dtype}')
         return return_dict
 
 
@@ -440,7 +447,7 @@ def main():
     data_args: DataArguments
     training_args: TrainingArguments
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-
+    data_args.input_size = model_args.input_size
     rank0_print("=" * 20 + " Tokenizer preparation " + "=" * 20)
     # Load tokenizer from the given path with specified configurations
     tokenizer = AutoTokenizer.from_pretrained(
@@ -452,7 +459,8 @@ def main():
     )
 
     # Define and add special tokens
-    special_token = {"additional_special_tokens": ["<im_patch>"]}
+    # try:
+    special_token = {"additional_special_tokens": ["<im_patch>", "<|nvis_data_sep|>"]}
     tokenizer.add_special_tokens(special_token)
 
     if tokenizer.unk_token is not None and tokenizer.pad_token is None:
@@ -518,8 +526,8 @@ def main():
         for p in model.get_model().mm_projector.parameters():
             p.requires_grad = True
 
-    model_args.num_new_tokens = 1
-    model.initialize_vision_tokenizer(model_args, tokenizer)
+    model_args.num_new_tokens = len(special_token['additional_special_tokens'])
+    model.initialize_vision_tokenizer(model_args, tokenizer)    # The model.resize is seem like doing here.
 
     if model_args.pretrain_mllm:
         ckpt = torch.load(model_args.pretrain_mllm, map_location="cpu")
@@ -540,8 +548,8 @@ def main():
 
     if training_args.lora_enable:
         from peft import LoraConfig, get_peft_model
-        modules_to_save = list()
-        if training_args.tune_vision_encoder:
+        modules_to_save = ["mm_projector", "embed_tokens", "lm_head"]
+        if training_args.tune_vision_encoder or not model_args.freeze_vision_tower:
             modules_to_save.append('vision_tower')
         lora_config = LoraConfig(
             r=training_args.lora_r,
@@ -554,18 +562,18 @@ def main():
         )
         rank0_print("Adding LoRA adapters only on LLM.")
         model = get_peft_model(model, lora_config)
-        unfreeze_module = ["mm_projector", "embed_tokens", "lm_head"]
+        # unfreeze_module = ["mm_projector", "embed_tokens", "lm_head"]
         
         if model_args.pretrain_mllm_with_lora is not None: # This is for maybe stage-2 Train visual, proj, LLM.
             ckpt = torch.load(model_args.pretrain_mllm_with_lora, map_location='cpu')
             model.load_state_dict(ckpt)
             if is_rank_zero():
                 print(f'Loading the pretrain mllm model that contains LoRA')
-        if not model_args.freeze_vision_tower:
-            unfreeze_module.append('vision_tower')
+        # if not model_args.freeze_vision_tower:
+        #     unfreeze_module.append('vision_tower')
         
-        for n, p in model.named_parameters():
-            if any([x in n for x in unfreeze_module]):
+        for n, p in model.named_parameters():   # thus, mm_proj, embed, lm_head all get training.
+            if any([x in n for x in modules_to_save]):
                 p.requires_grad = True
         if is_rank_zero():
             print_trainable_parameters(model)
@@ -585,7 +593,14 @@ def main():
     #     train_dataset = TextDatasets(data_args, tokenizer, mode="train")
     # else:
     #     train_dataset = TextYNDatasets(data_args, tokenizer, mode="train")
-    train_dataset = CardiacDataset(data_args, tokenizer)
+    if data_args.dataset_src == 'mllm':
+        train_dataset = CardiacDataset(data_args, tokenizer)
+    elif data_args.dataset_src == 'cardiac' and data_args.dataset_stage == 'stage2':
+        train_dataset = Stage2Dataset(data_args, tokenizer)
+    elif data_args.dataset_src == 'cardiac' and data_args.dataset_stage in ['stage0', 'stage1']:
+        train_dataset = Stage_0_1_Dataset(data_args, tokenizer)
+    else:
+        raise NotImplementedError()
 
     eval_dataset = CardiacDataset(data_args, tokenizer, mode="val")
     data_collator = DataCollator()

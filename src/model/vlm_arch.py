@@ -13,6 +13,7 @@ logger.addHandler(file_log)
 
 import torch
 from transformers import AutoModel
+from safetensors import torch as storch
 
 from .CLIP import *
 from .encoder.builder import build_vision_tower
@@ -48,8 +49,8 @@ class VLMMetaModel:
         self.config.mm_projector_type = model_args.mm_projector_type
         self.config.mm_mlp_depth = model_args.mm_mlp_depth
         self.config.proj_out_num = model_args.proj_out_num
-        if model_args.vision_tower != 'dcformer':
-            self.config.vision_tower_config = model_args.vision_tower_config
+        # if model_args.vision_tower != 'dcformer':
+        #     self.config.vision_tower_config = model_args.vision_tower_config
         print(f'vlm_arch.py:: VLMMetaModel-71:: self.config.vision_tower: {self.config.vision_tower}')
         # vision tower
         
@@ -72,9 +73,12 @@ class VLMMetaModel:
             
 
         if model_args.pretrain_vision_model is not None:
-            vision_model_weights = torch.load(
-                model_args.pretrain_vision_model, map_location="cpu"
-            )
+            if model_args.pretrain_vision_model.endswith("safetensors"):
+                vision_model_weights = storch.load_file(model_args.pretrain_vision_model)
+            else:
+                vision_model_weights = torch.load(
+                    model_args.pretrain_vision_model, map_location="cpu"
+                )
             logger.info(f'vision_tower: {model_args.vision_tower}')
             # print(f'vlm_arch.py:: VLMMetaModel-71:: vision_tower: {model_args.vision_tower}')
             if hasattr(model_args, 'fix_vision_tower_prefix'):
@@ -90,6 +94,11 @@ class VLMMetaModel:
                     self.vision_tower.vision_tower.load_dcformer_state(
                         vision_model_weights, strict=True
                     )
+                elif model_args.pretrain_vision_model_status in ['prompt_siglip', 'siglip']:
+                    ckpt = {k.replace("vision_encoder.", ""): v for k, v in vision_model_weights.items() if 'vision_encoder' in k}
+                    # print(f'CKPT keys:\n{ckpt.keys()}')
+                    # print(f'VisionTower Keys:\n{self.vision_tower.vision_tower.state_dict().keys()}')
+                    self.vision_tower.vision_tower.load_state_dict(ckpt, strict=True)
                 else:
                     self.vision_tower.vision_tower.load_state_dict(
                         vision_model_weights, strict=True

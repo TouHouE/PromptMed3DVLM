@@ -1,5 +1,5 @@
 import os
-
+DEBUG: bool = os.environ.get("DEBUG", "0") == "1"
 import torch
 from torch import distributed as dist
 from tqdm import tqdm

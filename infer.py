@@ -164,7 +164,7 @@ def asking(
         text: str,
         __image: Optional[torch.Tensor | str] = None,
         __mask: Optional[torch.Tensor | str] = None,
-        temp: float = 0, top_p: float = .9, max_length: int = 512
+        temp: float = 0, top_p: float = .9, max_length: int = 512, do_mask: bool = True
 ):
     global image_loader, model
     text = "<im_patch>" * 256 + text  # Following training chat template.
@@ -197,6 +197,8 @@ def asking(
         if __mask.ndim == 4:
             __mask = __mask[None]
         __mask = __mask.to('cuda', torch.bfloat16)
+    if not do_mask:
+        __mask = None
 
     if DEBUG:
         print("image.shape: ", __image.shape)
@@ -217,7 +219,8 @@ def asking(
         output_ids, skip_special_tokens=True
     )
     return {
-        "AI": output_text,
+        "AI": [ot if ot.endswith(".") else f'{ot}.' for ot in output_text],
+        'mask_prompt': __mask is None,
         "temp": temp,
         "top_p": top_p,
         "max_length": max_length
@@ -330,14 +333,16 @@ def main(args):
             continue
         query = pack['conversations'][0]['value'].replace("<image>", "").strip()
         answer = pack['conversations'][1]['value']
-        if len(query) < 10 or len(answer) < 10:
+        if len(query) < 1 or len(answer) < 1:
             continue
+        if not answer.endswith("."):
+            answer = f'{answer}.'
         if any((query, answer) == _epack for _epack in exists_pool):
             continue
         try:
             output = asking(
                 query, pack['image'], pack.get('label', None),
-                temp=args.temp, top_p=args.top_p, max_length=args.max_length
+                temp=args.temp, top_p=args.top_p, max_length=args.max_length, do_mask=args.mask_prompt
             )
         except Exception as e:
             import traceback as tb
@@ -346,13 +351,16 @@ def main(args):
         output_pack = {
             'Question': query,
             "Answer": answer,
-            "Assistant": output["AI"][0].strip(),
+            "Assistant": output["AI"][0].strip(),            
             "pid": pack['pid'],
             'temp': args.temp,
             'top_p': args.top_p,
             'image_file': pack['image'],
             'mask_file': pack.get('label')
         }
+        if 'Answer Type' in pack:
+            output_pack['Answer Type'] = pack['Answer Type']
+            output_pack['Question Topic'] = pack['Question Topic']
         result_list.append(output_pack)
         JsonlWriter.write(output_pack)
     # Save pure Text
@@ -377,7 +385,8 @@ def main(args):
         'summary': summary,
         'cases': collector
     }
-    with open(args.pred_json.replace(".json", "_summary.json"), 'w+') as saver:
+    final_path = join(args.output_dir, args.output_name.replace(".json", "_summary.json"))
+    with open(final_path, 'w+') as saver:
         json.dump(collector2save, saver, indent=2)
 
     print("Done")
@@ -392,9 +401,11 @@ if __name__ == '__main__':
     parser.add_argument('--temp', type=float, default=0)
     parser.add_argument('--top_p', type=float, default=.9)
     parser.add_argument('--max_length', type=int, default=512)
-    parser.add_argument('--data_json_path', type=str, default='/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei/gemini_split_test.json')
+    parser.add_argument('--data_json_path', type=str, default='/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei/gemini_split_test_v2.json')
+    parser.add_argument('--mask_prompt', action='store_true', default=False)
     parser.add_argument('--chat_mode', action='store_true', default=False)
     parser.add_argument('--system_prompt', action='store_true', default=False)
 
     args = parser.parse_args()
+    print(f'Your config: \n{json.dumps(vars(args), indent=2)}')
     main(args)

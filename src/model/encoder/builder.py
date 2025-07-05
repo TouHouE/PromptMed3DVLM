@@ -35,7 +35,7 @@ class VisionTower(nn.Module):
 
         # TODO: here is debug information
         # Why using print? logger not working...
-        # print(f'builder.py::the vision_tower is {config.vision_tower}')
+        print(f'builder.py::the vision_tower is {config.vision_tower}')
         # print(f'builder.py::the select_layer is {self.select_layer}')
         # print(f'builder.py::the select_feature is {self.select_feature}')
         if config.vision_tower == "vit3d":
@@ -50,8 +50,10 @@ class VisionTower(nn.Module):
             )
             self.low_input_size = self.vision_tower.channels[-2]
             self.high_input_size = self.vision_tower.channels[-1]
-        elif config.vision_tower == 'prompt_dcformer':
-            self.vision_tower = MaskPromptDCFormer(config.vision_tower_config)
+        elif config.vision_tower in ['prompt_dcformer', 'mask_prompt_dcformer']:
+            self.vision_tower = MaskPromptDCFormer(PromptDCFormerConfig.small_config(config.input_size))
+            self.low_input_size = self.vision_tower.channels[-2]
+            self.high_input_size = self.vision_tower.channels[-1]
         else:
             raise ValueError(f"Unexpected vision tower: {config.vision_tower}")
 

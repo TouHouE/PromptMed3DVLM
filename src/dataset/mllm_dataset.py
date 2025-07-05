@@ -92,8 +92,12 @@ class CardiacDataset(Dataset):
         self.image_tokens = '<im_patch>' * args.proj_out_num
         self.data_list = list()
         all_pack = UIO.load_json(join(self.public_root, f'gemini_split_{mode}.json'))
-        # all_pack.extend(UIO.load_json(join(self.public_root, "caption_train.json")))
-        
+        vqa_size = len(all_pack)
+
+        if args.dataset_stage == 'stage2':
+            all_pack.extend(UIO.load_json(join(self.public_root, f"caption_{mode}_adding_mask_v2.json")))
+
+
         if getattr(args, 'is_promptsubset', False):
             print(f'`--is_promptsubset` is set')
             print(f'That meaning we trying to evaluate the model training on `PromptSubset`')
@@ -107,12 +111,17 @@ class CardiacDataset(Dataset):
         drop_num = 0
 
         for _, pack in enumerate(all_pack):
+            if 'caption' in pack:
+                pack['label'] = random.sample(list(set(pack['mask_pool'])), 1)[0]
             abs_pack: CardiacData | None = UIO.load_make_sure_exists(pack)
             if abs_pack is None:
                 with open('./missing_file.txt', 'a+') as ostream:
                     ostream.write(f"File: {pack['image']} False\n")
                 # print(f'Pass {idx}')
                 drop_num += 1
+                continue
+            if 'caption' in pack:
+                self.data_list.append(abs_pack)
                 continue
 
             query, answer = abs_pack['conversations']
@@ -150,10 +159,28 @@ class CardiacDataset(Dataset):
             query = list(filter(lambda conv_case: conv_case['from'] == 'human', convs))[0]['value']
             answer = list(filter(lambda conv_case: conv_case['from'] == 'gpt', convs))[0]['value']
             return query, answer
+        cur_cap = random.sample(pack['caption'], 1)[0]
+        cap = cur_cap['text']
+        style = cur_cap['style']
+        if style == 'Original Report':
+            style = 'CCTA checklist'
         query = random.sample(Caption_templates, 1)[0]
-        caption_pack = random.sample(pack['caption'], 1)[0]
-        answer = caption_pack['text']
-        query = f'{query} Generating style with {caption_pack["style"]}'
+        style = random.sample(Caption_style, 1)[0].format(style.lower())    # Already contains "."
+        query = f'{query} {style}'
+        sep = cur_cap['sep']
+        prob = random.random()
+        if DEBUG:
+            print(f'The random prob for drop non_vis_data: {prob}')
+        if prob < .5 or len(cur_cap['non_vis_data']) == 0:
+            cap = sep.join([_ctxt for _ctxt in cur_cap['rg_template'] if _ctxt != '[rep]'])
+        else:
+            non_vis_data = sep.join(cur_cap['non_vis_data'])
+            nvis_data_list = cur_cap['non_vis_data']
+            addition_info = random.sample(NonVisData_Intros, 1)[0].format(non_vis_data)
+            query = f'{addition_info}{query}'
+            cap = sep.join(nvis_data_list.pop(0) if _ctxt == '[rep]' else _ctxt for _ctxt in cur_cap['rg_template'])
+        answer = cap
+
         return query, answer
 
 

@@ -175,7 +175,7 @@ class VQACardiacDataset(CardiacDataset):
             history.append({'role': ROLE_MAP[_pack['from']], 'content': _pack['value']})
 
         result_map: dict[Literal['input_ids', 'labels', 'attention_mask'], torch.Tensor]
-        result_map = UText.preprocess(history, self.tokenizer, max_len=self.args.max_length, image_tokens=self.image_tokens)
+        result_map = UText.preprocess(history, self.tokenizer, max_len=self.args.max_length, image_tokens=self.image_tokens, args=self.args)
         result_map['input_id'] = result_map.pop('input_ids')[0] # remove batch_size
         result_map['label'] = result_map.pop('labels')[0]
         result_map['attention_mask'] = result_map.pop('attention_mask')[0]
@@ -236,7 +236,7 @@ class RGCardiacDataset(CardiacDataset):
         ]
         preprocessed_map: dict[Literal['input_ids', 'labels', 'attention_mask'], torch.Tensor]
         result_map: dict[Literal['input_id', 'label', 'attention_mask'], torch.Tensor] = dict()
-        preprocessed_map = UText.preprocess(convs, self.tokenizer, max_len=self.args.max_length, image_tokens=self.image_tokens)
+        preprocessed_map = UText.preprocess(convs, self.tokenizer, max_len=self.args.max_length, image_tokens=self.image_tokens, args=self.args)
         if DEBUG and DPACK:
             UText.show_debug_pack(preprocessed_map, self.tokenizer)
         result_map['input_id'] = preprocessed_map.pop('input_ids')[0]  # remove batch_size
@@ -250,10 +250,10 @@ class RGCardiacDataset(CardiacDataset):
             return 10
         
         if isinstance(self.usage_size, float):
-            return int(5000 * self.usage_size)
+            return int(len(self.data_list) * self.usage_size)
         
         if self.usage_size < 0:
-            return 5000 + self.usage_size
+            return len(self.data_list) + self.usage_size
 
         return self.usage_size
 
@@ -305,7 +305,7 @@ class TemplateCardiacDataset(CardiacDataset):
             {'role': 'user', 'content': query},
             {'role': 'assistant', 'content': answer},
         ]
-        preprocessed_pack = UText.preprocess(convs, self.tokenizer, self.args.max_length, self.image_tokens)
+        preprocessed_pack = UText.preprocess(convs, self.tokenizer, self.args.max_length, self.image_tokens, self.args)
         if DEBUG and DPACK:
             UText.show_debug_pack(preprocessed_pack, self.tokenizer)
         return_pack = {
@@ -345,9 +345,9 @@ class TemplateCardiacDataset(CardiacDataset):
         if DEBUG:
             return 10
         if isinstance(self.usage_size, float):
-            return int(5000 * self.usage_size)
+            return int(len(self.data_list) * self.usage_size)
         if self.usage_size < 0:
-            return 5000 + self.usage_size + 1
+            return len(self.data_list) + self.usage_size + 1
         return self.usage_size
 
 class Stage_0_1_Dataset(Dataset):
@@ -369,7 +369,7 @@ class Stage_0_1_Dataset(Dataset):
 class Stage2Dataset(Dataset):
     def __init__(self, args, tokenizer, mode='train'):
         ds_list = [
-            VQACardiacDataset(args, tokenizer, mode, usage_size=.5),
+            VQACardiacDataset(args, tokenizer, mode, usage_size=.75),
             RGCardiacDataset(args, tokenizer, mode, usage_size=.25),
             TemplateCardiacDataset(args, tokenizer, mode, usage_size=.25)
         ]

@@ -51,6 +51,17 @@ Caption_style = [
 ]
 
 
+NonVisData_Intros = [
+    "Given the patient's clinical background: {}<|nvis_data_sep|>",
+    "Considering these patient details: {}<|nvis_data_sep|>",
+    "With the following clinical information: {}<|nvis_data_sep|>",
+    "Based on the provided patient data: {}<|nvis_data_sep|>",
+    "Here is some patient context: {}<|nvis_data_sep|>",
+    "Including the patient's history: {}<|nvis_data_sep|>",
+    "With these key clinical notes: {}<|nvis_data_sep|>"
+]
+
+
 PosREC_templates = {
 "cls_questions": [
     "Can you find the {} in this image? Give coordinates.",

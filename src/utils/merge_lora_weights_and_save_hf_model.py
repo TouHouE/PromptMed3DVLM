@@ -85,6 +85,7 @@ class ModelArguments:
         default_factory=lambda: [64, 128],
         metadata={"help": "Output size of high feature."},
     )
+    new_sep_tokens: bool = field(default=False)
 
 
 @dataclass
@@ -132,6 +133,9 @@ def main():
     )
     old_vocab_size = len(tokenizer)
     # Define and add special tokens
+    special_tokens = ['<im_patch>']
+    if model_args.new_sep_tokens:
+        special_tokens.append("<|nvis_data_sep|>")
     special_token = {"additional_special_tokens": ["<im_patch>", "<|nvis_data_sep|>"]}
     tokenizer.add_special_tokens(special_token)
 
@@ -186,13 +190,17 @@ def main():
 
     print("Load weights with LoRA")
     state_dict = torch.load(model_args.model_with_lora, map_location="cpu")
+    """This statement is because of I'm not only store the lora but vision_tower, embed_tokens, lm_head, mm_proj.
+    Thus I need manualy modify the key name, this include 2 stage.
+    1. remove the `original_module`, that will look like: vision_tower.*.original_module.weights 
+    2. modify all of `modules_to_save.default` to empty string"""
     cancel_original_module_state_dict = {k: v for k, v in state_dict.items() if 'original_module' not in k}
     rename_modules_to_save_state_dict = {
         k.replace('modules_to_save.default.', ''): v for k, v in cancel_original_module_state_dict.items()
     }
 
     try:
-        model.load_state_dict(state_dict, strict=True)
+        model.load_state_dict(rename_modules_to_save_state_dict, strict=True)
     except Exception as e:
         breakpoint()
 

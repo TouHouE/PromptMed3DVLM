@@ -1,5 +1,7 @@
 import logging
 import os
+import json
+import logging
 from dataclasses import dataclass, field, fields
 from typing import List, Optional, Literal, Type, Sequence
 
@@ -150,6 +152,11 @@ class DataArguments:
     dataset_stage: str = field(default='stage2')
     dataset_scale: str = field(default='full', metadata={'help': 'Now can apply "full" and "d10"'})
     dataset_version: str = field(default='v2')
+
+    template_size: Optional[float] = field(default=None )
+    caption_size: Optional[float] = field(default=None)
+    vqa_size: Optional[float] = field(default=None)
+    
     chat_mode: bool = field(default=True)
     is_promptsubset: bool = field(default=False)
     move_to_cuda: bool = field(default=False, metadata={'help': 'Setting monai.transforms.EnsureType to cuda(True) or cpu(False)'})
@@ -181,6 +188,18 @@ class DataArguments:
         default="./data/M3D-VQA/M3D_VQA_yn_train.csv",
         metadata={"help": "Path to training VQA Yes or No data."},
     )
+
+    def __post_init__(self):
+        if self.dataset_stage == 'stage2':
+            self.vqa_size = .75 if (v := self.vqa_size) is None else v
+            self.caption_size = 2500 if (v := self.caption_size) is None else v
+            self.template_size = 2500 if (v := self.template_size) is None else v
+        elif self.dataset_stage == 'stage1':
+            self.caption_size = 5000 if (v := self.caption_size) is None else v
+            self.template_size = 5000 if (v := self.template_size) is None else v
+            self.vqa_size = None    
+
+            
 
 
 @dataclass
@@ -602,7 +621,7 @@ def main():
     else:
         raise NotImplementedError()
 
-    eval_dataset = CardiacDataset(data_args, tokenizer, mode="val")
+    # eval_dataset = CardiacDataset(data_args, tokenizer, mode="val")
     data_collator = DataCollator()
 
     rank0_print("=" * 20 + " Training " + "=" * 20)
@@ -611,7 +630,7 @@ def main():
         args=training_args,
         data_collator=data_collator,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        # eval_dataset=eval_dataset,
         compute_metrics=compute_metrics,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     )
@@ -675,5 +694,17 @@ def main():
         dist.destroy_process_group()
 
 
+def parser_debug():    
+    parser = transformers.HfArgumentParser(
+        (ModelArguments, DataArguments, TrainingArguments)
+    )
+    model_args: ModelArguments
+    data_args: DataArguments
+    training_args: TrainingArguments
+    model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+    data_args.input_size = model_args.input_size
+    print(json.dumps(vars(data_args), indent=2))
+
 if __name__ == "__main__":
+    # parser_debug()
     main()

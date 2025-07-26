@@ -3,6 +3,7 @@ import csv
 import os
 import random
 from os.path import join, exists
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -62,7 +63,7 @@ def parse_args(args=None):
 
     parser.add_argument(
         "--test_method",
-        type=tuple,
+        type=str, nargs="+",
         default=(
             "recall",
             "accuracy",
@@ -117,6 +118,31 @@ def calculate_accuracy(similarity_matrix, k, data_pool=None):
     return accuracy
 
 
+def data_collactor_drop_na(batches):
+    """ret = {
+            'image': vpack['image'],
+            'text': text,
+            'input_id': input_id,
+            'attention_mask': attention_mask,
+            'question_type': "Image_text_retrieval",
+            'mask': vpack.get('label', torch.zeros_like(vpack['image']))
+        }"""
+    return_dict = defaultdict(list)
+    for pack in batches:
+        if pack['image'] is None:
+            continue
+        for key, value in pack.items():
+            return_dict[key].append(value)
+    for k, v in return_dict.items():
+        # print(f'Key:{k}| ', end='')
+        if torch.is_tensor(v[0]):
+            return_dict[k] = torch.stack(v, 0)
+            # print(f'{return_dict[k].shape}')
+            continue
+        # print(v)
+    return return_dict
+
+
 def main():
     seed_everything(42)
     args = parse_args()
@@ -162,6 +188,7 @@ def main():
             pin_memory=True,
             shuffle=False,
             drop_last=False,
+            collate_fn=data_collactor_drop_na
         )
 
         txt_feats_all = []

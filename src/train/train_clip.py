@@ -1,8 +1,11 @@
 import os
 import re
 import json
+import logging
+import datetime as dt
+from os.path import join, exists
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Final, Literal
 
 import torch
 import torch.distributed as dist
@@ -15,6 +18,9 @@ import wandb
 from src.dataset.clip_dataset import CLIPDataset, CardiacCLIPDataset
 from src.model.CLIP import DEC_CLIP, DEC_CLIPConfig
 from src.model.prompt_clip import PromptCLIPConfig, PromptCLIP
+
+LOG_MSG_FMT: Final[str] = '%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s'
+LOG_DATE_FMT: Final[str] = '%Y-%m-%d %H:%M:%S'
 
 def is_rank_zero():
     if "RANK" in os.environ:
@@ -54,6 +60,7 @@ class ModelArguments:
     local_loss: bool = field(default=False)
 
     pretrained_model: str = field(default=None)
+    load_from_dcformer: bool = field(default=True)
 
     input_size: tuple = field(default=(256, 256, 128))
     dim: int = field(default=768)
@@ -63,10 +70,14 @@ class ModelArguments:
 
     vision_encoder: Optional[str] = field(default="dcformer")
     loss_type: str = field(default="nce")
+    limit_loss_type: str = field(default='huber')
     siglip_margin: float = field(default=0.1)
 
 @dataclass
 class DataArguments:
+    masking: Literal['do', 'no', 'random'] = field(default="no")
+    struct_ds: str = field(default="")
+    dataset_src: Literal['caption', 'desc', 'random'] = field(default="caption")
     data_root: str = field(
         default="./data", metadata={"help": "Root directory for all data."}
     )
@@ -100,6 +111,18 @@ class DataArguments:
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
+    freeze_vision_encoder: bool = field(default=False)
+    freeze_language_encoder: bool = field(default=False)    
+    freeze_prompt_encoder: bool = field(default=False)
+
+    fg_lambda: float = field(default=0.2)
+    fuse_lambda: float = field(default=1)
+    limit_lambda: float = field(default=1)
+
+    
+    no_roi_sig_loss: bool = field(default=False)
+    no_fuse_sig_loss: bool = field(default=False)
+
     cache_dir: Optional[str] = field(default=None)
     optim: str = field(default="adamw_torch")
     remove_unused_columns: bool = field(default=False)
@@ -213,9 +236,40 @@ def main():
     model_args: ModelArguments
     data_args: DataArguments
     training_args: TrainingArguments
-
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
+    for key in ['fg', 'fuse', 'limit']:
+        setattr(model_args, f'{key}_lambda', getattr(training_args, f'{key}_lambda'))
+
+    if model_args.vision_encoder == 'dcformer':
+        print(f'Current vision encoder is {model_args.vision_encoder}, the RoI branch SigLoss is needed.')
+        print(f'Force setting `no_roi_sig_loss` to False')
+        training_args.no_roi_sig_loss = False
+        training_args.no_fuse_sig_loss = True
+
+    print('=' * 10 + "Logger Preparation" + '=' * 10)
+    # building logger folder
+    cur_date = dt.datetime.strftime(dt.datetime.now(), r"%b-%d-%H-%M")
+    handler_dir = join(training_args.output_dir, f'log_{cur_date}')    
+    os.makedirs(handler_dir, exist_ok=True)
+
+    logger_list = [
+        'src.model.encoder.prompt_dcformer', 'src.dataset.clip_dataset', 'src.model.prompt_clip',
+        'src.dataset.utils.transforms'
+    ]
+    for pkg_name in logger_list:
+        pkg_logger = logging.getLogger(pkg_name)
+        log_fmt = logging.Formatter(LOG_MSG_FMT, datefmt=LOG_DATE_FMT)                
+        handler_path = join(handler_dir, f"{pkg_name.replace('.', '-')}_{os.environ.get('LOCAL_RANK', '0')}.log")        
+        file_log = logging.FileHandler(handler_path, 'a')
+        file_log.setLevel(logging.INFO)
+        file_log.setFormatter(log_fmt)
+        pkg_logger.addHandler(file_log)
+
+    model_args.no_roi_sig_loss = training_args.no_roi_sig_loss
+    model_args.no_fuse_sig_loss = training_args.no_fuse_sig_loss
+
+    print('=' * 10 + "Model Preparation" + '=' * 10)
     tokenizer = AutoTokenizer.from_pretrained(model_args.language_model_name_or_path)
     if model_args.vision_encoder == 'dcformer':
         config = DEC_CLIPConfig.from_dict(vars(model_args))
@@ -232,8 +286,9 @@ def main():
         vit_dict = dict()
         other_dict = dict()
         key_not_in_model, key_not_in_ckpt = model.load_state_dict(ckpt, strict=False)
+        print(key_not_in_model)
 
-        if model_args.vision_encoder in ['prompt_dcformer', 'mask_prompt_dcformer']:
+        if model_args.vision_encoder in ['prompt_dcformer', 'mask_prompt_dcformer'] and model_args.load_from_dcformer:
             for key, value in ckpt.items():
                 if 'vision_encoder' in key:
                     vit_dict[key.replace("vision_encoder.", "")] = value
@@ -242,11 +297,28 @@ def main():
             model.vision_encoder.load_dcformer_state(vit_dict)
         
         # key_in_model, key_in_ckpt = model.load_state_dict(ckpt, strict=False)
-
-
-
         # assert len(key_in_model) == 0, "The ckpt should contains all of parameter for model"
         print("load pretrained model.")
+
+    """Now Let we process model freeze function"""
+    if training_args.freeze_language_encoder:
+        print(f'Freeze Language Encoder')
+        for key, param in model.named_parameters():
+            if 'languange' in key:
+                param.require_grad = False
+    if training_args.freeze_vision_encoder:
+        print(f'Freeze Vision Encoder')
+        for key, param in model.named_parameters():
+            if 'vision' in key:
+                param.requires_grad = False
+    if model_args.vision_encoder != 'dcformer':
+        if training_args.freeze_prompt_encoder:
+            print(f"Freeze Prompt Encoder.")
+        for key, param in model.named_parameters():
+            if 'prompt' in key:
+                param.requires_grad = training_args.freeze_prompt_encoder        
+    
+    print('=' * 10 + "Dataset Preparation" + '=' * 10)
     train_dataset = CardiacCLIPDataset(data_args, tokenizer, mode='train')
     eval_dataset = CardiacCLIPDataset(data_args, tokenizer, mode='val')
     # train_dataset = CLIPDataset(data_args, tokenizer, mode="train")

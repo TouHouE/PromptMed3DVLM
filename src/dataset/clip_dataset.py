@@ -2,14 +2,18 @@ import random
 import os
 import json
 import traceback as tb
+import logging
 from os.path import join
 from typing import Literal
+from copy import deepcopy as dcp
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
 import transformers as HFT
 import monai.transforms as mtf
 import SimpleITK as sitk
+import nibabel as nib
 from torch.utils.data import Dataset
 from monai.transforms import allow_missing_keys_mode
 from monai.data import set_track_meta, MetaTensor
@@ -17,6 +21,7 @@ from einops import rearrange
 
 from src.dataset.utils import transforms as UT
 from src.dataset.utils import myio as UIO
+from src.dataset.prompt_templates import CardiacMap
 
 
 def custom_scale(pack):
@@ -56,12 +61,15 @@ class CardiacCLIPDataset(Dataset):
             loader: Composed data loading pipeline using MONAI transforms.
             transform: Data transformation pipeline for training or validation based on the mode.
         """
-        self.args = args
+        self.args = args        
         self.data_root = args.data_root
         self.tokenizer = tokenizer
         self.mode = mode
         self.data_list = UIO.load_json(join(args.data_root, f'caption_{mode}_adding_mask.json'))
         
+        if getattr(args, 'struct_ds', "") != "":
+            self.desc_pool = UIO.load_json(args.struct_ds)
+
         if getattr(args, 'ignore_split', False) and mode == 'test':
             self.data_list.extend(UIO.load_json(join(args.data_root, f'caption_val.json')))
             self.data_list.extend(UIO.load_json(join(args.data_root, f'caption_train.json')))
@@ -94,9 +102,25 @@ class CardiacCLIPDataset(Dataset):
             self.data_list = self.data_list[:512]
         elif 'test' in mode:
             self.transform = val_transform
+            tmp_data_list = list()
+            cnt = 0
+            for pack in self.data_list:
+                _pack = dcp(pack) 
+                _pack['label'] = random.sample(
+                    list(set(_pack['mask_pool'])), 1
+                )[0]
+                _pack = UIO.load_make_sure_exists(_pack)
+                if _pack is None or 'label' not in _pack:
+                    cnt += 1
+                    continue
+                tmp_data_list.append(pack)
+            print(f"Drop {cnt} data")
+            self.data_list = tmp_data_list            
             self.data_list = self.data_list[:test_size]
 
     def __len__(self):
+        # if self.mode == 'train':
+        #     return len(self.data_list) * 2
         return len(self.data_list)
 
     def truncate_text(self, input_text, max_tokens):
@@ -151,18 +175,37 @@ class CardiacCLIPDataset(Dataset):
         vpack = self.transform(vpack)   # It must contains `image`, and possible `label`, `image_Fg`
         return vpack
 
-    def __getitem__(self, idx):                    
+    def building_desc(self, organ: int | list[int], org_data: dict[str, str | list[int]]) -> dict[str, str | list[int]]:
+        if isinstance(organ, list):
+            organ = organ[0]        
+        organ = int(organ)
+        org_data['organ'] = [organ]
+        organ_name = CardiacMap[organ]
+        context = self.desc_pool[organ_name]
+        start_hint = random.sample(context["ContextSettingSentences"], 1)[0]
+        desc_pool = context['DescriptionPhrases']
+        random_desc = random.randint(5, len(desc_pool))
+        desc_list = random.sample(desc_pool, random_desc)
+        start_hint = f'{start_hint} {desc_list.pop(0)}. '
+        caption_list = [start_hint] + desc_list
+        org_data['raw_text'] = '. '.join(caption_list)
+        return org_data
+
+    def __getitem__(self, idx):     
+        if idx >= len(self.data_list):
+            idx = idx % len(self.data_list)               
         data = self.data_list[idx]
         data['label'] = random.sample(
             list(set(data['mask_pool'])), 1
         )[0]
-        data: dict[str, str] = UIO.load_make_sure_exists(data)
+        data: dict[str, str] = UIO.load_make_sure_exists(data)        
 
-        if data is None:
+        if data is None or 'label' not in data:
             buf_pack = self.__getitem__(random.randint(0, len(self.data_list) - 1))
             if self.mode != 'train':
                 buf_pack['image'] = None                                    
-            return buf_pack
+            return buf_pack        
+        
         try:
             vpack: dict[str, torch.Tensor | MetaTensor] = self.loading_visual_data(data)
         except Exception as e:
@@ -173,12 +216,37 @@ class CardiacCLIPDataset(Dataset):
             print(f'Error happen: {e.args}')
             tb.print_exc()
             return self.__getitem__(idx + 1)
+        ds_src = getattr(self.args, 'dataset_src', 'caption')
+        
+        if ds_src == 'random':
+            use_desc_prob = random.random()
+        elif ds_src == 'caption':
+            use_desc_prob = 0
+        elif ds_src == 'desc':
+            use_desc_prob = 1
+        else:
+            use_desc_prob = 0        
+        is_desc = use_desc_prob > .5 and hasattr(self, 'desc_pool')
+        logger.debug(f'use_desc_prob: {use_desc_prob:.1%} [>50%?] {is_desc}')
 
         if self.mode != 'train':
             raw_text = data["raw_text"]                
-        else:
+        elif self.mode == 'train' and not is_desc:
             raw_text = random.sample(data['caption'], 1)[0]['text']
+        elif self.mode == 'train' and is_desc:
+            all_organ = np.unique(nib.load(data['label']).get_fdata()).tolist()  # Remove background digit `0`
+            organ = random.sample(list(set(all_organ) - {0, 9}), 1)[0]
+            data = self.building_desc(organ, data)
+            raw_text = data['raw_text']
+        
+
         text = self.truncate_text(raw_text, self.args.max_length)
+        debug_info = f"""
+        Input Text: {text}
+        =========================================
+        """
+
+        logger.debug(debug_info)
         text_tensor = self.tokenizer(
             text, max_length=self.args.max_length, truncation=True, padding="max_length", return_tensors="pt"
         )

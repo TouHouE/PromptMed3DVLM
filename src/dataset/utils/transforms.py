@@ -1,6 +1,10 @@
 import os
+import random
+import logging
+import json
 from typing import Iterable, Literal
 DEBUG: bool = os.environ.get("DEBUG", "0") == "1"
+logger = logging.getLogger(__name__)
 
 
 import numpy as np
@@ -72,7 +76,7 @@ def get_fg_loader(args) -> list[callable]:
         comp.append(MT.Lambda(debug))
     comp.append(
         DummyCropForeground(
-            classes_range=[0, 10], source_key='mask_fg', keys=['image_fg', 'mask_fg'], allow_missing_keys=True
+            classes_range=[0, 10], source_key='mask_fg', keys=['image_fg', 'mask_fg'], allow_missing_keys=True, masking=args.masking
         )
     )
     if DEBUG:
@@ -95,7 +99,7 @@ def get_fg_loader(args) -> list[callable]:
 def get_normal_loader(args):
     scaler_type, model_arch_type, shape_type = args.loader_type.split('-')
     input_size = args.input_size
-
+    
     if scaler_type == 'unet':
         scaler = MT.Lambda(nnunet_scaler)
     elif scaler_type == 'jpeg':
@@ -135,31 +139,65 @@ def select_fn(x):
 
 
 class DummyCropForeground(MT.Transform):
-    def __init__(self, classes_range: range | list[int], source_key: str, **kwargs):
+    def __init__(self, classes_range: range | list[int], source_key: str, masking: Literal['do', 'no', 'random'] = 'no', **kwargs):
         """
             The classes_range is the range of the foreground classes if is a list the actual range will be:
             list(n0, n1) -> range(n0, n1 + 1)
         """
         # super().__init__(**kwargs)
+        self.masking = masking
         if isinstance(classes_range, list):
             classes_range = range(classes_range[0], classes_range[1] + 1)
         self.cropper = MT.CropForegroundd(select_fn=select_fn, source_key=source_key, **kwargs)
-        # self.rand_cropper = MT.CenterSpatialCrop(roi_size=(128, 128, 128))
+        # self.rand_cropper = MT.CenterSpatialCrop(roi_size=(128, 128, 128))        
+        self.keys = kwargs.get('keys')
+        if not isinstance(self.keys, list):
+            self.keys = [self.keys]
         self.source_key = source_key
-        self.full_class = classes_range
+        self.full_class: range = classes_range
+        content = f"""
+        DummyCropForeground Declare Log:
+         * __init__ value:
+            - classes_range: {classes_range}
+            - source_key: {source_key}
+            - kwargs: {json.dumps(kwargs, indent=2)}
+        -----------------------------------------------------
+         - masking: {self.masking}
+         - source_key: {self.source_key}
+         - keys: {self.keys}
+         - full_class[range -> list]: {list(self.full_class)}
+        =====================================================
+        """
+        logger.debug(content)
 
     def __call__(self, pack: dict):
         src_k = self.source_key
-
+        logging.debug(f'pack keys in fg_crop: {pack.keys()}')
         if 'organ' not in pack:            
             organ = self.full_class
         else:
             organ = pack['organ']
+        
         if DEBUG and 'organ' not in pack:
             print(f"key `organ` not in input, using {self.full_class} instead")
         if DEBUG and 'organ' in pack:
             print(f'Organ: {pack["organ"]}')
-            
+        
+        if self.masking == 'do':
+            prob = 1
+        elif self.masking == 'random':
+            prob = random.random()
+        else:   # do not using masking
+            prob = 0
+        logging.debug(f'FgCrop| masking_prob: {prob:.2%}')
+
+        if prob > .5:            
+            _masking = torch.any(torch.stack([pack[src_k] == oid for oid in organ]), dim=0)
+            for dk in self.keys:
+                pad_v = pack[dk].min()
+                pack[dk][~_masking] = pad_v # making not in organ value into min value
+            return pack
+
         for organ_id in organ:
             pack[src_k][pack[src_k] == organ_id] = -1
         pack[src_k][pack[src_k] > -1] = 0

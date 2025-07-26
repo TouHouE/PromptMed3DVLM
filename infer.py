@@ -1,6 +1,9 @@
 import argparse
 import json
 import os
+import random
+import shutil
+from copy import deepcopy
 from functools import partial
 from itertools import product
 from os.path import join, exists
@@ -10,12 +13,14 @@ import evaluate
 import pandas as pd
 import jsonlines as jsonl
 import numpy as np
+import nibabel as nib
 import torch
 import transformers as HFT
 from monai import transforms as MT
 from tqdm.auto import tqdm
 
 from src.model.llm import VLMQwenForCausalLM
+from src.dataset import prompt_templates as PT
 
 DEBUG: bool = os.environ.get("DEBUG", "0") == "1"
 
@@ -33,8 +38,77 @@ convs_hist = list()
 class DummyDebuggingModel:
     def generate(self, inputs, images=None, **kwargs):
         b = inputs.shape[0]
-
         return torch.randint(0, 1143, (b, 10))
+
+
+def making_query(query: str, args: argparse.Namespace) -> str:
+    do_system_prompt = True
+    if args.system_prompt.lower() in ['true', 'false']:
+        do_system_prompt = args.system_prompt.lower() == 'true'
+
+    if not args.chat_mode and not do_system_prompt:
+        return "<im_patch>" * 256 + query
+    convs = list()
+
+    if args.system_prompt.lower() == 'true':
+        convs.append({"role": 'system', 'content': "You are a helpful medical assistant."})
+    elif exists(args.system_prompt):    # For if user save the system message in a file.
+        with open(args.system_prompt, 'r', encoding='utf-8') as reader:
+            convs.append({"role": 'system', 'content': reader.read()})
+    else:   # For if user directly apply the system message into `--system_prompt``
+        convs.append({'role': "system", 'content': args.system_prompt})
+
+    convs.append({'role': 'user', 'content': "<im_patch>" * 256 + query})
+    
+    chat = tokenizer.apply_chat_template(convs, tokenize=False, add_generation_prompt=True)
+    return chat
+
+
+def regular_all_type_ds_into_vqa(pack_list: list[dict[str, any]], task_name=None) -> list[dict[str, any]]:
+    new_pack_list = list()
+    pbar = tqdm(pack_list, total=len(pack_list), desc='Reformat to vqa storage type...')
+    for pack in pbar:
+        if 'conversations' in pack: # VQA Task
+            new_pack_list.append(pack)
+            continue        
+        pack['label'] = random.sample(list(set(pack['mask_pool'])), 1)[0]
+
+        # For Position detection Task                
+        # for a in 
+        # query = random.sample(PT.PosREC_templates['cls_questions'], 1)[0]
+
+
+
+        # The task name are Report Generation
+        ccta = list(filter(lambda x: x['style'] == 'Original Report', pack['caption']))[0]
+        query = random.sample(PT.Caption_templates, 1)[0]
+        style = random.sample(PT.Caption_style, 1)[0].format("CCTA checklist")
+        drop_rep = ccta['sep'].join(list(filter(lambda x: x != '[rep]', ccta['rg_template'])))        
+
+        convs0 = [
+            {'from': 'human', 'value': f'{query} {style}'},
+            {'from': 'gpt', 'value': drop_rep}
+        ]
+        dpack = deepcopy(pack)
+        dpack['conversations'] = convs0
+        dpack['Question Topic'] = "W/O unvisual data"
+        dpack['Answer Type'] = 'CCTA checklist'
+        new_pack_list.append(dpack)
+
+        if len(ccta['non_vis_data']) < 1:
+            continue
+        fpack = deepcopy(pack)
+        additional_info = ccta['sep'].join(ccta['non_vis_data'])
+        additional_info = random.sample(PT.NonVisData_Intros, 1)[0].format(additional_info)
+        convs1 = [
+            {'from': 'human', 'value': f'{additional_info}{query} {style}'},
+            {'from': 'gpt', 'value': ccta['text']}
+        ]
+        fpack['conversations'] = convs1
+        fpack['Question Topic'] = "W/ unvisual data"
+        fpack['Answer Type'] = "CCTA checklist"
+        new_pack_list.append(fpack)
+    return new_pack_list
 
 
 def load_make_sure_exists(pack):
@@ -81,6 +155,9 @@ def slice_scaler(pack, scaler):
 
 
 def nnunet_scaler(pack):
+    """
+    Following nnUNetv2's CTNormalization.
+    """
     low, high = -395., 842.
     avg, std = 279.8117370605469, 253.5583953857422
 
@@ -102,9 +179,9 @@ def load_model(dst_model_name):
         __model = HFT.AutoModelForCausalLM.from_pretrained(dst_model_name, torch_dtype=torch.bfloat16,
                                                            device_map='auto', trust_remote_code=True)
         print(f'Loading from AutoModel')
-    except Exception as e:
+    except Exception as _:
         __model = VLMQwenForCausalLM.from_pretrained(dst_model_name, torch_dtype=torch.bfloat16, device_map='auto')
-        print(f'Loading from VLMQwenForCausalLM')
+        print('Loading from VLMQwenForCausalLM')
     return __model
 
 
@@ -161,13 +238,13 @@ def get_score(pack):
 
 @torch.inference_mode()
 def asking(
-        text: str,
+        text: str,  # query
         __image: Optional[torch.Tensor | str] = None,
         __mask: Optional[torch.Tensor | str] = None,
         temp: float = 0, top_p: float = .9, max_length: int = 512, do_mask: bool = True
 ):
-    global image_loader, model
-    text = "<im_patch>" * 256 + text  # Following training chat template.
+    global image_loader, model    
+    # text = "<im_patch>" * 256 + text  # Following training chat template.
     pack = tokenizer(text, return_tensors="pt")
 
     if DEBUG:
@@ -180,12 +257,8 @@ def asking(
     if isinstance(__mask, str):
         vpack['label'] = __mask
     vpack = image_loader(vpack)
-
-    if 'image' in vpack:
-        __image = vpack['image']
-
-    if 'label' in vpack:
-        __mask = vpack['label']
+    __image = vpack.get('image', __image)
+    __mask = vpack.get('label', __mask)    
     del vpack
 
     if __image is not None:
@@ -208,6 +281,7 @@ def asking(
     with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
         output_ids = model.generate(
             inputs=pack['input_ids'].to('cuda'),
+            attention_mask=pack['attention_mask'].to('cuda'),
             images=__image,
             masks=__mask,
             max_new_tokens=max_length,
@@ -220,16 +294,20 @@ def asking(
     )
     return {
         "AI": [ot if ot.endswith(".") else f'{ot}.' for ot in output_text],
-        'mask_prompt': __mask is None,
+        'mask_prompt': __mask is not None,  # True -> apply mask, False -> no mask
         "temp": temp,
         "top_p": top_p,
         "max_length": max_length
     }
 
 
-def load_data_json(args):
-    with open(args.data_json_path, 'r') as loader:
+def load_json(path):
+    with open(path, 'r', encoding='utf-8') as loader:
         return json.load(loader)
+
+
+def load_data_json(args):
+    return load_json(args.data_json_path)    
 
 
 def load_exists_eval(args):
@@ -237,7 +315,7 @@ def load_exists_eval(args):
     if not exists(tmp_eval):
         return list()
 
-    with open(tmp_eval, 'r') as loader:
+    with open(tmp_eval, 'r', encoding='utf-8') as loader:
         return [json.loads(line) for line in loader.readlines()]
 
 
@@ -285,9 +363,9 @@ def get_image_loader_from_args(args):
         ])
     elif args.loader_type == 'm3d':
         basic.extend([
-            MT.Lambda(partial(slice_scaler, scaler=MT.Intensity(0, 255, dtype=torch.int8))),
-            MT.Lambda(partial(slice_scaler, scaler=MT.Intensity())),
-            MT.Orientationd("SRA", keys=['image', 'label'], allow_missing_keys=True),
+            MT.Lambda(partial(slice_scaler, scaler=MT.ScaleIntensity(0, 255, dtype=torch.int8))),
+            MT.Lambda(partial(slice_scaler, scaler=MT.ScaleIntensity())),
+            MT.Orientationd(axcodes="SRA", keys=['image', 'label'], allow_missing_keys=True),
             MT.Zoomd(zoom=0.5,
                      mode=('bilinear', 'nearest'), keys=['image', 'label'],
                      allow_missing_keys=True
@@ -299,35 +377,56 @@ def get_image_loader_from_args(args):
     return MT.Compose(basic + [MT.ToTensord(keys=['image', 'label'], allow_missing_keys=True)])
 
 
+def make_tqdm_status(args):
+    if 'cap' in args.data_json_path:    # TODO: Task should using `--task` to decision
+        task: str = 'RG'
+    else:
+        task: str = 'VQAv1' if 'v2' not in args.data_json_path else 'VQAv2'
+    
+    if args.system_prompt.lower() == 'true':
+        sys: str = 'Def'
+    elif args.system_prompt.lower() == 'false':
+    mask: bool = args.mask_prompt
+    chat: bool = args.chat_mode
+    model_name: str = args.model_name.split('/')[-1].replace('_merged', '')
+    
+
+
+
 def main(args):
     global model, tokenizer, image_loader
     os.makedirs(args.output_dir, exist_ok=True)
-    with open(join(args.output_dir, 'config.json'), 'w+') as dumper:
+    
+    with open(join(args.output_dir, 'config.json'), 'w+', encoding='utf-8') as dumper:
         json.dump(vars(args), dumper, indent=2)
+    shutil.copyfile(__file__, join(args.output_dir, 'infer_code.py'))
+    
     if DEBUG:
-        print(f'Using dummy model to avoid loading time')
+        print('Using dummy model to avoid loading time')
         model = DummyDebuggingModel()
     else:
         model = load_model(args.model_name)
     tokenizer = HFT.AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
-    # image_loader = MT.Compose([
-    #     MT.LoadImage(image_only=True),
-    #     MT.EnsureType(device='cuda'),
-    #     MT.EnsureChannelFirst(),
-    #     MT.Orientation("RAS"),
-    #     MT.Lambda(nnunet_scaler),
-    #     MT.Zoom(0.5, mode='trilinear'),
-    #     MT.ResizeWithPadOrCrop((256, 256, 128)),
-    #     MT.ToTensor(),
-    # ])
     image_loader = get_image_loader_from_args(args)
     data_list = load_data_json(args)
+    data_list = regular_all_type_ds_into_vqa(data_list)    
     result_list = load_exists_eval(args)
-    exists_pool = [(rpack['Question'], rpack['Answer']) for rpack in result_list]
-    # result_pack = list()
-    pbar = tqdm(enumerate(data_list), total=len(data_list))
+    exists_pool: list[tuple[str, str, int]] = [(rpack['Question'], rpack['Answer'], rpack.get("ID", -1)) for rpack in result_list]    
+    last_name = args.model_name.split('/')[-1].replace("_merged", "")
+    if 'cap' in args.data_json_path:
+        task = 'RG'
+    else:
+        task = "VQA"
+    
+    
+    pbar = tqdm(
+        enumerate(data_list), total=len(data_list), 
+        desc=f"Task: {task}| Mask: {args.mask_prompt}|Model: {last_name}"
+    )
     JsonlWriter = jsonl.open(join(args.output_dir, args.output_name.replace(".json", ".jsonl")), 'w')
+    cur_i = 0
     for i, pack in pbar:
+
         pack = load_make_sure_exists(pack)
         if pack is None:
             continue
@@ -337,59 +436,69 @@ def main(args):
             continue
         if not answer.endswith("."):
             answer = f'{answer}.'
-        if any((query, answer) == _epack for _epack in exists_pool):
-            continue
-        try:
+        if any((query, answer, pack.get("ID", -1)) == _epack for _epack in exists_pool):
+            continue        
+        try:            
             output = asking(
-                query, pack['image'], pack.get('label', None),
+                making_query(query, args), pack['image'], pack.get('label', None),
                 temp=args.temp, top_p=args.top_p, max_length=args.max_length, do_mask=args.mask_prompt
             )
-        except Exception as e:
+        except Exception:
             import traceback as tb
             tb.print_exc()
             print(f'Question: {query}')
+
         output_pack = {
             'Question': query,
             "Answer": answer,
-            "Assistant": output["AI"][0].strip(),            
+            "Assistant": output.pop("AI")[0].strip(),            
             "pid": pack['pid'],
             'temp': args.temp,
             'top_p': args.top_p,
+            'chat_mode': args.chat_mode,
+            'system_prompt': args.system_prompt,
             'image_file': pack['image'],
             'mask_file': pack.get('label')
         }
+        output_pack.update(output)
+        
         if 'Answer Type' in pack:
             output_pack['Answer Type'] = pack['Answer Type']
             output_pack['Question Topic'] = pack['Question Topic']
+        
+        if 'ID' in pack:
+            output_pack['ID'] = pack['ID']
         result_list.append(output_pack)
         JsonlWriter.write(output_pack)
     # Save pure Text
+    JsonlWriter.close()
+    
     with open(join(args.output_dir, args.output_name), 'w+') as saver:
         json.dump(result_list, saver, indent=2)
-
-    # chunk_list = np.array_split(result_list, len(result_list) // 64)
     collector = list()
 
     for chunk in tqdm(result_list, total=len(result_list), desc='Taking score...'):
         rep = get_score(chunk)
         collector.append(rep)
+
     with open(join(args.output_dir, args.output_name.replace('.json', '_cases_score.json')), 'w+') as saver:
         json.dump(collector, saver, indent=2)
-
     df = pd.DataFrame(collector)
     summary = dict()
+
     for key in ['BLEU', 'ROUGE-1', 'METEOR', 'BERT-F1', "BERT-PR", "BERT-REC"]:
         summary[key] = df[key].describe().to_dict()
-
     collector2save = {
         'summary': summary,
         'cases': collector
     }
     final_path = join(args.output_dir, args.output_name.replace(".json", "_summary.json"))
-    with open(final_path, 'w+') as saver:
-        json.dump(collector2save, saver, indent=2)
 
-    print("Done")
+    with open(final_path, 'w+', encoding='utf-8') as saver:
+        json.dump(collector2save, saver, indent=2)
+    df = pd.DataFrame(collector)
+    df.to_csv(final_path.replace('.json', '.csv'), index=False, index_label=False)
+    print(f"Done, Save at : {final_path}")
 
 
 if __name__ == '__main__':
@@ -402,10 +511,12 @@ if __name__ == '__main__':
     parser.add_argument('--top_p', type=float, default=.9)
     parser.add_argument('--max_length', type=int, default=512)
     parser.add_argument('--data_json_path', type=str, default='/home/jovyan/shared/uc207pr4f57t9/cardiac/taipei/taipei/gemini_split_test_v2.json')
+    parser.add_argument('--task', type=str, choices=['caption', 'vqa', 'bbox'])
     parser.add_argument('--mask_prompt', action='store_true', default=False)
     parser.add_argument('--chat_mode', action='store_true', default=False)
-    parser.add_argument('--system_prompt', action='store_true', default=False)
-
+    parser.add_argument('--system_prompt', type=str, default="False")
+    parser.add_argument('--taks_name', type=str, default=None, choices=['pos'])
+    parser.add_argument('--local_rank')
     args = parser.parse_args()
     print(f'Your config: \n{json.dumps(vars(args), indent=2)}')
     main(args)

@@ -5,14 +5,6 @@ from dataclasses import dataclass
 import logging
 # logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-log_fmt = logging.Formatter(
-    '%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-file_log = logging.FileHandler('./log/prompt_visual_encoder.log', 'w+')
-file_log.setLevel(logging.DEBUG)
-file_log.setFormatter(log_fmt)
-logger.addHandler(file_log)
 
 import torch
 import transformers as HFT
@@ -313,14 +305,12 @@ class MaskPromptDCFormer(nn.Module):
 
         feature_list = self.dcformer(pixel_values)
         if no_prompt:
-            logger.info(f'argument `no_prompt` is set to True, ignore masks')
+            logger.debug(f'argument `no_prompt` is set to True, ignore masks')
             return feature_list
 
         if masks is None:
-            logger.info(f'No `masks` is provided, use all-zero mask instead')
-            masks = torch.zeros_like(pixel_values)
-        
-            
+            logger.debug(f'No `masks` is provided, use all-zero mask instead')
+            masks = torch.zeros_like(pixel_values)                    
         masks_prompt = self.prompt_encoder(masks, return_hidden_states=True)
 
         if return_dcformer:
@@ -346,11 +336,44 @@ class MaskPromptDCFormer(nn.Module):
     def channels(self):
         return self.dcformer.channels
 
+class MaskPromptDCFormerClassifier(HFT.PreTrainedModel):
+    config_class = PromptDCFormerConfig
+    base_model_prefix = "mask_prompt_dcformer"
+
+    def __init__(self, config: PromptDCFormerConfig):
+        super().__init__(config)
+        self.mask_prompt_dcformer = MaskPromptDCFormer(config)
+        self.classifier = nn.Linear(self.mask_prompt_dcformer.channels[-1], config.num_class)
+        self.criterion = nn.CrossEntropyLoss()
+
+    def freeze_prompt_encoder(self) -> 'MaskPromptDCFormerClassifier':
+        logger.info('Freezing MaskEncoder...')
+        for param in self.mask_prompt_dcformer.prompt_encoder.parameters():
+            param.requires_grad = False
+        return self
+
+    def freeze_dcformer(self) -> 'MaskPromptDCFormerClassifier':
+        logger.info('Freezing DCFormer...')
+        for param in self.mask_prompt_dcformer.dcformer.parameters():
+            param.requires_grad = False
+        return self    
+
+    def forward(self, images, masks=None, labels=None, no_prompt=False, return_dcformer=False):
+        feat = self.mask_prompt_dcformer(images, masks)[-1]     
+
+        if labels is not None:
+            return {'loss': self.criterion(self.classifier(feat), labels.long())}
+        return feat
+
+
 HFT.AutoConfig.register('mask_prompt_dcformer', PromptDCFormerConfig)
+# HFT.AutoConfig.register('prompt_dcformer', PromptDCFormerConfig)
 HFT.AutoModel.register(PromptDCFormerConfig, MaskPromptDCFormer)
+# print(__name__)
 
 if __name__ == "__main__":
     config = PromptDCFormerConfig.small_config((256, 256, 128))
     mask_encoder = MaskPromptEncoder(config)
     x = torch.randn((1, 1, 256, 256, 128))
     y = mask_encoder(x)
+    

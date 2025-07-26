@@ -142,6 +142,16 @@ class CardiacDataset(Dataset, ABC):
         if 'image_fg' in visual_pack:
             return_pack['image_fg'] = visual_pack['image_fg']
         return return_pack
+    
+    def __len__(self):
+        if DEBUG:
+            return 10
+        if isinstance(self.usage_size, float) and self.usage_size < 1:
+            return int(self.usage_size * len(self.data_list))
+        if self.usage_size < 0:
+            return len(self.data_list[:int(self.usage_size)])
+        return int(self.usage_size)
+        
 
 
 class VQACardiacDataset(CardiacDataset):
@@ -182,12 +192,16 @@ class VQACardiacDataset(CardiacDataset):
 
         return result_map
 
-    def __len__(self):
-        if DEBUG:
-            return 10
-        if isinstance(self.usage_size, float):
-            return int(self.usage_size * len(self.data_list))
-        return len(self.data_list[:self.usage_size])
+    # def __len__(self):
+    #     if DEBUG:
+    #         return 10
+    #     if isinstance(self.usage_size, float) and self.usage_size < 1:
+    #         return int(self.usage_size * len(self.data_list))
+    #     if self.usage_size < 0:
+    #         return len(self.data_list[:int(self.usage_size)])
+    #     return int(self.usage_size)
+
+        # return len(self.data_list[:self.usage_size])
 
 class RGCardiacDataset(CardiacDataset):
     def __init__(self, args, tokenizer, mode='train', usage_size=-1, **kwargs):
@@ -244,18 +258,12 @@ class RGCardiacDataset(CardiacDataset):
         result_map['attention_mask'] = preprocessed_map.pop('attention_mask')[0]
         return result_map
 
-    @cache
-    def __len__(self):
-        if DEBUG:
-            return 10
-        
-        if isinstance(self.usage_size, float):
-            return int(len(self.data_list) * self.usage_size)
-        
-        if self.usage_size < 0:
-            return len(self.data_list) + self.usage_size
+    @override
+    def __getitem__(self, item):
+        if item >= (org_len := len(self.data_list)):
+            item %= org_len
+        return super().__getitem__(item)
 
-        return self.usage_size
 
 class TemplateCardiacDataset(CardiacDataset):
     def __init__(self, args, tokenizer, mode='train', usage_size=-1, **kwargs):        
@@ -318,6 +326,8 @@ class TemplateCardiacDataset(CardiacDataset):
 
     @override
     def __getitem__(self, index):
+        if index >= (org_max := len(self.data_list)):
+            index %= org_max
         pack = self.data_list[index]
         vloader_pack = {'image': pack['image'], 'label': pack['label']}
         vpack = self.load_visual_pack(vloader_pack)
@@ -341,19 +351,11 @@ class TemplateCardiacDataset(CardiacDataset):
             return_pack['image_fg'] = vpack['image_fg']
         return return_pack
 
-    def __len__(self) -> int:
-        if DEBUG:
-            return 10
-        if isinstance(self.usage_size, float):
-            return int(len(self.data_list) * self.usage_size)
-        if self.usage_size < 0:
-            return len(self.data_list) + self.usage_size + 1
-        return self.usage_size
 
 class Stage_0_1_Dataset(Dataset):
     def __init__(self, args, tokenizer, mode='train'):        
-        rg_lambda =  getattr(args, 'rg_lambda', .75)
-        temp_lambda = getattr(args, 'temp_lambda', .5)
+        rg_lambda =  getattr(args, 'rg_lambda', 5000)
+        temp_lambda = getattr(args, 'temp_lambda', 5000)
             
         self.dataset = ConcatDataset([
             RGCardiacDataset(args, tokenizer, mode=mode, usage_size=rg_lambda),
@@ -368,12 +370,21 @@ class Stage_0_1_Dataset(Dataset):
 
 class Stage2Dataset(Dataset):
     def __init__(self, args, tokenizer, mode='train'):
+        self.args = args
+        vqa_size = getattr(args, 'vqa_size', .75)
+        caption_size = getattr(args, 'caption_size', 2500)
+        template_size = getattr(args, 'template_size', 2500)        
         ds_list = [
-            VQACardiacDataset(args, tokenizer, mode, usage_size=.75),
-            RGCardiacDataset(args, tokenizer, mode, usage_size=.25),
-            TemplateCardiacDataset(args, tokenizer, mode, usage_size=.25)
+            VQACardiacDataset(args, tokenizer, mode, usage_size=vqa_size),
+            RGCardiacDataset(args, tokenizer, mode, usage_size=caption_size),
+            TemplateCardiacDataset(args, tokenizer, mode, usage_size=template_size)
         ]
+
+        print("Each Dataset size:")
         
+        for ds_name, ds in zip(['vqa', 'caption', 'template'], ds_list):
+            print(f' - {ds_name:10}: {len(ds)}')
+
         self.dataset = ConcatDataset(ds_list)
 
     def __getitem__(self, item):
@@ -386,12 +397,13 @@ class Stage2Dataset(Dataset):
 if __name__ == '__main__':
     from argparse import Namespace
     import transformers as HFT
-    DEBUG=True
+    DEBUG=False
     tokenizer_ = HFT.AutoTokenizer.from_pretrained('MagicXin/Med3DVLM-Qwen-2.5-7B')
     tokenizer_.add_tokens("<|nvis_data_sep|>")
     ds = Stage2Dataset(
         Namespace(proj_out_num=256, max_length=768, loader_type='unet-med3d-resize', input_size=(256, 256 ,128)), tokenizer=tokenizer_, mode='train'
     )
+    exit()
     for pack_ in iter(ds):
         for k, v in pack_.items():
             if torch.is_tensor(v):

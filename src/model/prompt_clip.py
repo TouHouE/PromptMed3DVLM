@@ -1,8 +1,9 @@
 import os
+import logging
 from typing import Literal
 DEBUG: bool = os.environ.get("DEBUG", "0") == "1"
 DLOSS: bool = os.environ.get("DLOSS", "0") == "1" or DEBUG
-
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
@@ -35,7 +36,7 @@ class PromptCLIPConfig(PretrainedConfig):
 
     def __init__(
         self,
-        language_model_name_or_path: str = "",
+        language_model_name_or_path: str = "medicalai/ClinicalBERT",
         local_loss: bool = False,
         gather_loss: bool = True,
         input_size: tuple = (256, 256, 128),
@@ -48,8 +49,7 @@ class PromptCLIPConfig(PretrainedConfig):
         bias: float = 0.0,
         efficient_loss: bool = False,
         vision_encoder: str = "dcformer",
-        prompt_encoder: Literal['mask', 'point', 'full'] = 'mask',
-        init_lambda: tuple[float] = (.2, 1., 1.),
+        prompt_encoder: Literal['mask', 'point', 'full'] = 'mask',        
         **kwargs,
     ):
         self.language_model_name_or_path = language_model_name_or_path
@@ -66,7 +66,6 @@ class PromptCLIPConfig(PretrainedConfig):
         self.efficient_loss = efficient_loss
         self.vision_encoder = vision_encoder
         self.prompt_encoder = prompt_encoder
-        self.init_lambda = init_lambda
         super().__init__(**kwargs)
 
 
@@ -102,8 +101,15 @@ class PromptCLIP(PreTrainedModel):
         self.local_loss = config.local_loss
         self.gather_loss = config.gather_loss
         self.loss_type = config.loss_type
-        self.sim_loss = nn.HuberLoss(reduction='none')
-        self.loss_adjuster = nn.Parameter(torch.zeros(3))
+        self.limit_loss_type = config.limit_loss_type
+        logger.debug(f'limit_loss_type: {self.limit_loss_type}')
+
+        if self.limit_loss_type == 'huber':
+            self.sim_loss = nn.HuberLoss(reduction='none')
+        else:
+            self.sim_loss = nn.KLDivLoss(reduction='none')
+        self.loss_adjuster = nn.Parameter(torch.zeros(3))   # Waiting for dynamically adjust loss factor.
+
         if self.loss_type == "sigmoid":
             self.t_prime = nn.Parameter(torch.tensor(config.t_prime))
             self.bias = nn.Parameter(torch.tensor(config.bias))
@@ -111,9 +117,14 @@ class PromptCLIP(PreTrainedModel):
             self.bias_fuse = nn.Parameter(torch.tensor(config.bias))
         else:
             self.logit_scale = nn.Parameter(torch.ones([]) * config.t_prime)
+        self.no_roi_sig_loss = getattr(config, 'no_roi_sig_loss', False)
+        self.no_fuse_sig_loss = getattr(config, 'no_fuse_sig_loss', False)
 
-
+    @torch.inference_mode()
     def infer_encode_image(self, image, masks, do_mask=True) -> torch.Tensor:
+        """
+            This method will only usage when doing inference.
+        """
         if not do_mask:
             feats = self.vision_encoder.dcformer(image)
             _mm_proj = self.mm_vision_proj
@@ -133,14 +144,15 @@ class PromptCLIP(PreTrainedModel):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | torch.Tensor:
         if masks is None:
             masks = torch.zeros_like(image)
-        if image_fg is None:    # For inference, when only given `image` and masks
+        if image_fg is None and not self.training:    # For inference, when only given `image` and masks
             return self.infer_encode_image(image, masks, do_mask)
-
-
         fuse_feats = self.vision_encoder(image, masks)
         image_feats = self.vision_encoder.dcformer(image_fg)
 
-        limit = self.sim_loss(fuse_feats[-1], image_feats[-1])
+        if self.limit_loss_type == 'kld':
+            limit = self.sim_loss(torch.softmax(fuse_feats[-1], dim=-1), torch.softmax(image_feats[-1], dim=-1))
+        elif self.limit_loss_type == 'huber':
+            limit = self.sim_loss(fuse_feats[-1], image_feats[-1])
         
         if isinstance(image_feats, list):
             image_feats = image_feats[-1]
@@ -153,7 +165,7 @@ class PromptCLIP(PreTrainedModel):
         fuse_feats = fuse_feats.mean(dim=1)
         fuse_feats = self.mm_fuse_proj(fuse_feats)
         fuse_feats = F.normalize(fuse_feats, dim=-1)
-        if sim_loss:
+        if sim_loss and self.limit_loss_type != 'no':
             return image_feats, fuse_feats, limit
         return image_feats, fuse_feats
 
@@ -171,7 +183,21 @@ class PromptCLIP(PreTrainedModel):
         """
             return: (lambda for siglip_image, lambda for siglip_fuse, lambda for alig fuse and image)
         """
-        lambda1, lambda2, lambda3 = self.config.init_lambda
+        lambda1, lambda2, lambda3 = [
+            getattr(self.config, f'{k}_lambda', default_lambda) for k, default_lambda in zip(
+                ['fg', 'fuse', 'limit'], [.2, 1, 1]
+            ) 
+        ]
+        if self.no_roi_sig_loss:
+            lambda1 = 0
+            logging.debug(f'RoI branch SigLoss factor setting to 0, because `no_roi_sig_loss` is True')
+        if self.no_fuse_sig_loss:
+            lambda2 = 0
+            logging.debug(f'Fuse branch SigLoss factor setting to 0, because `no_roi_fuse_loss` is True')
+        if self.limit_loss_type == 'no':            
+            lambda3 = 0
+            logging.debug(f'Embedding limit loss factor setting to 0, because `limit_loss_type` is `no`')
+
         return lambda1, lambda2, lambda3
 
     def forward(self, images, input_ids, attention_mask, labels, masks, image_fgs, **kwargs):
@@ -179,24 +205,10 @@ class PromptCLIP(PreTrainedModel):
         # Image_features: the augmentation image -> E_v(FCrop(x_i, x_p))
         # Fuse_features: E_v(x_i) + E_p(x_p)
         image_features, fuse_features, limit = self.encode_image(
-            images, masks=masks, image_fg=image_fgs, return_dcformer=True
+            images, masks=masks, image_fg=image_fgs, return_dcformer=True, sim_loss=True
         )
-        text_features = self.encode_text(input_ids, attention_mask)
-        if DLOSS:
-            print(f'Input:')
-            print(f'Image is Nan? {torch.isnan(images).any()}')
-            print(f'Mask is Nan? {torch.isnan(masks).any()}')
-            print(f'ForegroundImage is Nan? {torch.isnan(image_fgs).any()}')
-            print(f'Text is Nan? {torch.isnan(input_ids).any()}')
-            print(f'Text[attention] is nan? {torch.isnan(attention_mask).any()}')
-            
-            print(f'Features:')
-            print(f'Image is Nan? {torch.isnan(image_features).any()}')
-            print(f'Prompt is Nan? {torch.isnan(fuse_features).any()}')
-            print(f'Image is Nan? {torch.isnan(text_features).any()}')
-            
-                  
-
+        text_features = self.encode_text(input_ids, attention_mask)        
+        
         rank = 0
         world_size = 1
         if has_distributed and dist.is_initialized():
@@ -263,9 +275,11 @@ class PromptCLIP(PreTrainedModel):
                         print(f'SigLoss[Foreground, Text]: {siglip_fg}')
                         print(f'SigLoss[PromptFuse, Text]: {siglip_fuse}')
                         print(f'KLDiv[Foreground, PromptFuse]: {limit.mean()}')
-                    
-                    for cur_lambda, cur_loss in zip(self.get_lambda(step), [siglip_fg, siglip_fuse, limit]):
-                        loss += cur_lambda * cur_loss
+                    lambda_img, lambda_fuse, lambda_img_fuse = self.get_lambda(step)
+
+                    loss += siglip_fg * lambda_img + siglip_fuse * lambda_fuse + limit * lambda_img_fuse
+                    # for cur_lambda, cur_loss in zip(self.get_lambda(step), [siglip_fg, siglip_fuse, limit]):
+                    #     loss += cur_lambda * cur_loss
                     # loss += local_loss + local_fuse_loss + self.sim_loss(image_features, fuse_features)
 
                 torch.distributed.nn.all_reduce(loss)
@@ -319,9 +333,8 @@ class PromptCLIP(PreTrainedModel):
                 siglip_fuse = (-torch.sum(F.logsigmoid(labels * logits_fuse)) / batch_size)
                 # limit = self.sim_loss(image_features, fuse_features)
                 limit = all_limit.mean()
-                loss = siglip_fg * lambda_img
-                loss += siglip_fuse * lambda_fuse
-                loss += limit * lambda_img_fuse
+                loss = siglip_fg * lambda_img + siglip_fuse * lambda_fuse + limit * lambda_img_fuse
+                
                 if DLOSS:
                     print(f'SigLoss[Foreground, Text]: {siglip_fg}')
                     print(f'SigLoss[PromptFuse, Text]: {siglip_fuse}')
@@ -344,14 +357,11 @@ class PromptCLIP(PreTrainedModel):
             logits = (logits_per_image + logits_per_text) / 2.0
             fuse_logits = (logits_per_fuse + logits_per_fuse.T) / 2.0
             lambda_img, lambda_fuse, lambda_img_fuse = self.get_lambda(step)
-
             siglip_fg = (-torch.sum(F.logsigmoid(labels * logits)) / batch_size)
             siglip_fuse = (-torch.sum(F.logsigmoid(labels * fuse_logits)) / batch_size)
-            # limit = self.sim_loss(image_features, fuse_features)
+            limit = limit.mean()
+            loss = siglip_fg * lambda_img + siglip_fuse * lambda_fuse + limit * lambda_img_fuse            
             
-            loss = siglip_fg * lambda_img
-            loss += siglip_fuse * lambda_fuse
-            loss += limit * lambda_img_fuse
             if DLOSS:
                 print(f'SigLoss[Foreground, Text]: {siglip_fg}')
                 print(f'SigLoss[PromptFuse, Text]: {siglip_fuse}')
@@ -366,10 +376,15 @@ class PromptCLIP(PreTrainedModel):
             "logits": logits,
             "siglip_fg": siglip_fg,
             "siglip_fuse": siglip_fuse,
-            "sim": limit
+            "sim": limit,
+            'lambda_fg': lambda_img,
+            'lambda_fuse': lambda_fuse,
+            'lambda_sim': lambda_img_fuse
         }
 
         return ret
+
+    
 
 
 def gather_features(

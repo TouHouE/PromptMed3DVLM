@@ -1,0 +1,282 @@
+{
+    "Left Ventricle": {
+        "ContextSettingSentences": [
+          "In CT images, the Left Ventricle is typically observed as",
+          "On a CT scan, the Left Ventricle is characterized by",
+          "When visualized with CT, the Left Ventricle appears as",
+          "A CT examination reveals the Left Ventricle to be",
+          "CT imaging clearly depicts the Left Ventricle as"
+        ],
+        "DescriptionPhrases": [
+          "a distinct anatomical structure within the heart.",
+          "located in the left lower portion of the heart.",
+          "demonstrating high density after contrast enhancement.",
+          "with well-defined borders against surrounding tissues.",
+          "exhibiting its characteristic conical or elliptical shape.",
+          "showing its thickest muscular wall among all cardiac chambers.",
+          "with visible trabeculations, particularly towards the apex.",
+          "its dimensions can be precisely measured using multiplanar reconstruction.",
+          "any deviation from its normal morphology can indicate pathology.",
+          "its relationship to the left atrium and aorta is clearly delineated.",
+          "its dynamic changes throughout the cardiac cycle can be assessed.",
+          "functional parameters like ejection fraction can be derived from cinematic CT.",
+          "abnormalities in its size, shape, or wall motion are key diagnostic indicators.",
+          "the presence of thrombi within its lumen is noteworthy in certain conditions.",
+          "it serves as a crucial landmark for evaluating global cardiac function.",
+          "its walls are clearly delineated, allowing for thickness measurements to assess for hypertrophy.",
+          "the lumen is normally patent, indicating unobstructed blood flow.",
+          "contrast enhancement helps to differentiate its internal structures from the blood pool.",
+          "changes in its overall volume are indicative of various disease states.",
+          "it plays a vital role in systemic circulation by pumping oxygenated blood to the body."
+        ]
+      },
+    "Right Ventricle": {
+    "ContextSettingSentences": [
+      "In CT images, the Right Ventricle is typically observed as",
+      "On a CT scan, the Right Ventricle is characterized by",
+      "When visualized with CT, the Right Ventricle appears as",
+      "A CT examination reveals the Right Ventricle to be",
+      "CT imaging clearly depicts the Right Ventricle as"
+    ],
+    "DescriptionPhrases": [
+      "a distinct anatomical structure within the heart.",
+      "located as the most anterior and rightmost cardiac chamber.",
+      "demonstrating low density after contrast enhancement if not fully opacified.",
+      "with well-defined borders against the sternum and left ventricle.",
+      "exhibiting its characteristic crescent or semilunar shape in cross-section.",
+      "showing a thinner muscular wall compared to the left ventricle.",
+      "with visible trabeculations and a prominent moderator band.",
+      "its dimensions can be precisely measured, though often challenging due to its complex shape.",
+      "any deviation from its normal morphology can indicate pathology.",
+      "its relationship to the right atrium and pulmonary artery is clearly delineated.",
+      "its dynamic changes throughout the cardiac cycle can be assessed.",
+      "functional parameters like ejection fraction can be derived from cinematic CT.",
+      "abnormalities in its size, shape, or wall motion are key diagnostic indicators for right heart strain.",
+      "the presence of thrombi within its lumen is noteworthy in conditions like pulmonary embolism.",
+      "it serves as a crucial landmark for evaluating pulmonary circulation.",
+      "its walls are clearly delineated, allowing for thickness measurements to assess for hypertrophy.",
+      "the lumen is normally patent, indicating unobstructed blood flow to the pulmonary artery.",
+      "contrast enhancement helps to differentiate its internal structures from the blood pool.",
+      "changes in its overall volume are indicative of various disease states affecting pulmonary circulation.",
+      "it plays a vital role in pulmonary circulation by pumping deoxygenated blood to the lungs."
+    ]
+  },
+  "Left Atrium": {
+    "ContextSettingSentences": [
+      "In CT images, the Left Atrium is typically observed as",
+      "On a CT scan, the Left Atrium is characterized by",
+      "When visualized with CT, the Left Atrium appears as",
+      "A CT examination reveals the Left Atrium to be",
+      "CT imaging clearly depicts the Left Atrium as"
+    ],
+    "DescriptionPhrases": [
+      "a distinct anatomical structure within the heart.",
+      "located as the most posterior chamber of the heart.",
+      "demonstrating homogeneous enhancement after contrast administration.",
+      "with well-defined borders, often appearing somewhat rounded or oval.",
+      "exhibiting its characteristic connections to the pulmonary veins.",
+      "showing relatively thin walls compared to the ventricles.",
+      "with visible orifices for the pulmonary veins, typically four in number.",
+      "its dimensions can be precisely measured, particularly its anterior-posterior and transverse diameters.",
+      "any deviation from its normal morphology or size can indicate pathology.",
+      "its relationship to the left ventricle and pulmonary veins is clearly delineated.",
+      "its dynamic changes during the cardiac cycle are less pronounced than ventricular changes.",
+      "functional parameters related to atrial filling and emptying can be assessed.",
+      "abnormalities in its size, shape, or appendage are key diagnostic indicators for conditions like atrial fibrillation.",
+      "the presence of thrombi within its lumen, especially the appendage, is noteworthy.",
+      "it serves as a crucial landmark for assessing pulmonary venous return.",
+      "its walls are clearly delineated, allowing for evaluation of wall thickness or fibrosis.",
+      "the lumen is normally patent, ensuring unobstructed flow from the lungs.",
+      "contrast enhancement helps to differentiate its internal structures from the blood pool.",
+      "changes in its overall volume are indicative of various disease states, including mitral valve disease.",
+      "it plays a vital role in receiving oxygenated blood from the lungs and passing it to the left ventricle."
+    ]
+  },
+  "Right Atrium": {
+    "ContextSettingSentences": [
+      "In CT images, the Right Atrium is typically observed as",
+      "On a CT scan, the Right Atrium is characterized by",
+      "When visualized with CT, the Right Atrium appears as",
+      "A CT examination reveals the Right Atrium to be",
+      "CT imaging clearly depicts the Right Atrium as"
+    ],
+    "DescriptionPhrases": [
+      "a distinct anatomical structure within the heart.",
+      "located as the most anterior and rightmost upper chamber of the heart.",
+      "demonstrating homogeneous enhancement after contrast administration.",
+      "with well-defined borders, often appearing somewhat irregular due to pectinate muscles.",
+      "exhibiting its characteristic connections to the superior and inferior vena cava.",
+      "showing relatively thin walls compared to the ventricles.",
+      "with visible orifices for the superior and inferior vena cava.",
+      "its dimensions can be precisely measured, though variations are common.",
+      "any deviation from its normal morphology or size can indicate pathology.",
+      "its relationship to the right ventricle and major systemic veins is clearly delineated.",
+      "its dynamic changes during the cardiac cycle are less pronounced than ventricular changes.",
+      "functional parameters related to atrial filling can be assessed.",
+      "abnormalities in its size, shape, or appendage are key diagnostic indicators for conditions like tricuspid valve disease.",
+      "the presence of thrombi within its lumen is noteworthy, particularly in conditions predisposing to venous stasis.",
+      "it serves as a crucial landmark for assessing systemic venous return.",
+      "its walls are clearly delineated, allowing for evaluation of wall thickness or infiltration.",
+      "the lumen is normally patent, ensuring unobstructed flow from the systemic circulation.",
+      "contrast enhancement helps to differentiate its internal structures from the blood pool.",
+      "changes in its overall volume are indicative of various disease states, including right heart failure.",
+      "it plays a vital role in receiving deoxygenated blood from the body and passing it to the right ventricle."
+    ]
+  },
+  "Aorta": {
+    "ContextSettingSentences": [
+      "In CT images, the Aorta is typically observed as",
+      "On a CT scan, the Aorta is characterized by",
+      "When visualized with CT, the Aorta appears as",
+      "A CT examination reveals the Aorta to be",
+      "CT imaging clearly depicts the Aorta as"
+    ],
+    "DescriptionPhrases": [
+      "a distinct, large-caliber arterial vessel.",
+      "originating from the left ventricle and arching over the heart.",
+      "demonstrating avid and homogeneous enhancement after intravenous contrast.",
+      "with well-defined, smooth walls in its healthy state.",
+      "exhibiting its characteristic tubular or slightly elliptical shape.",
+      "showing varying diameters along its course from ascending to descending segments.",
+      "with visible major branches arising from the aortic arch and descending segments.",
+      "its dimensions can be precisely measured at multiple levels to assess for dilation.",
+      "any deviation from its normal morphology, such as tortuosity or aneurysm, can indicate pathology.",
+      "its relationship to surrounding mediastinal and abdominal structures is clearly delineated.",
+      "its pulsatile nature can be observed in cardiac-gated CT studies.",
+      "functional parameters related to flow dynamics can sometimes be inferred.",
+      "abnormalities in its size, shape, or wall integrity are key diagnostic indicators for various aortopathies.",
+      "the presence of intraluminal thrombi or calcification within its lumen is noteworthy.",
+      "it serves as a crucial landmark for evaluating systemic blood flow.",
+      "its walls are clearly delineated, allowing for assessment of wall thickening or dissection flaps.",
+      "the lumen is normally widely patent, ensuring unobstructed blood distribution.",
+      "contrast enhancement helps to differentiate its internal lumen from the vessel wall and surrounding tissues.",
+      "changes in its overall diameter are indicative of various disease states, including aneurysmal disease.",
+      "it plays a vital role in distributing oxygenated blood from the heart to the entire systemic circulation."
+    ]
+  },
+  "MyocardiumLV": {
+    "ContextSettingSentences": [
+      "In CT images, the Left Ventricular Myocardium is typically observed as",
+      "On a CT scan, the Left Ventricular Myocardium is characterized by",
+      "When visualized with CT, the Left Ventricular Myocardium appears as",
+      "A CT examination reveals the Left Ventricular Myocardium to be",
+      "CT imaging clearly depicts the Left Ventricular Myocardium as"
+    ],
+    "DescriptionPhrases": [
+      "a thick, muscular layer forming the wall of the left ventricle.",
+      "demonstrating avid and homogeneous enhancement after contrast administration in its healthy state.",
+      "with a higher density compared to the blood pool in contrast-enhanced studies.",
+      "showing its greatest thickness at the base of the heart and progressively thinning towards the apex.",
+      "with clear delineation between the endocardium (inner lining) and epicardium (outer lining).",
+      "its overall mass can be precisely quantified for assessment of hypertrophy or atrophy.",
+      "any focal thinning or thickening can indicate regional pathology like infarction or hypertrophy.",
+      "its relationship to the coronary arteries is crucial for assessing blood supply.",
+      "its dynamic wall motion throughout the cardiac cycle can be evaluated with cine CT.",
+      "abnormalities in its thickness, density, or enhancement pattern are key diagnostic indicators.",
+      "the presence of low-attenuation areas may suggest myocardial fat or edema.",
+      "it serves as a crucial component in the assessment of left ventricular function.",
+      "regional wall motion abnormalities, such as hypokinesis or akinesis, can be identified.",
+      "delayed hyperenhancement patterns may indicate myocardial scar or fibrosis.",
+      "perfusion defects within its substance can be detected using stress CT perfusion imaging.",
+      "its texture and attenuation values can provide clues to underlying cardiomyopathies.",
+      "measurements of its wall thickness are crucial for diagnosing concentric or asymmetric hypertrophy.",
+      "the interventricular septum, a part of the left ventricular myocardium, is also well visualized.",
+      "it plays a vital role in generating the pressure required for systemic blood circulation.",
+      "assessment of its viability can be performed in specific CT protocols."
+    ]
+  },
+  "Coronary Arteries": {
+    "ContextSettingSentences": [
+      "In CT images, the Coronary Arteries are typically observed as",
+      "On a CT scan, the Coronary Arteries are characterized by",
+      "When visualized with CT, the Coronary Arteries appear as",
+      "A CT examination reveals the Coronary Arteries to be",
+      "CT imaging clearly depicts the Coronary Arteries as"
+    ],
+    "DescriptionPhrases": [
+      "small, branching vessels that lie on the epicardial surface of the heart.",
+      "demonstrating avid and homogeneous enhancement after contrast administration, distinguishing them from surrounding fat.",
+      "with a patent lumen in healthy individuals, allowing for unobstructed blood flow.",
+      "showing their typical anatomical course, including the left main, LAD, circumflex, and right coronary arteries.",
+      "with clear delineation of their major and sometimes smaller branches.",
+      "their diameters can be precisely measured to assess for stenosis or ectasia.",
+      "any focal narrowing or occlusion indicates the presence of atherosclerotic disease.",
+      "their relationship to the underlying myocardium is crucial for assessing blood supply.",
+      "the presence of calcified or non-calcified plaque within their walls is a key diagnostic finding.",
+      "abnormalities in their course or origin are rare but important to identify.",
+      "they serve as the primary blood supply to the heart muscle.",
+      "CT angiography allows for detailed visualization of their lumen and vessel wall.",
+      "quantification of coronary calcium score can be performed on non-contrast CT.",
+      "changes in their lumen diameter are indicative of various stages of coronary artery disease.",
+      "assessment of plaque characteristics, such as low-attenuation or positive remodeling, is possible.",
+      "they are a critical focus in diagnosing and managing ischemic heart disease.",
+      "multiplanar reconstructions (MPR) and volume rendering (VR) help in their comprehensive evaluation.",
+      "the absence of significant stenosis indicates low probability of obstructive coronary artery disease.",
+      "collateral circulation may be observed in cases of chronic total occlusion.",
+      "their patency is essential for maintaining adequate myocardial perfusion."
+    ]
+  },
+  "Fat": {
+    "ContextSettingSentences": [
+      "In CT images, Cardiac Fat is typically observed as",
+      "On a CT scan, Cardiac Fat is characterized by",
+      "When visualized with CT, Cardiac Fat appears as",
+      "A CT examination reveals Cardiac Fat to be",
+      "CT imaging clearly depicts Cardiac Fat as"
+    ],
+    "DescriptionPhrases": [
+      "regions of low attenuation (fat density) surrounding the heart.",
+      "predominantly located in the epicardial space, surrounding the coronary arteries.",
+      "with well-defined margins against the myocardium and pericardium.",
+      "exhibiting its characteristic uniform low density, typically around -50 to -150 Hounsfield Units.",
+      "showing variable distribution and quantity among individuals.",
+      "often found in the atrioventricular and interventricular grooves, enveloping the coronary vessels.",
+      "its volume can be quantitatively measured for assessment of cardiovascular risk.",
+      "any deviation from its normal homogenous appearance, such as areas of higher density, can be noteworthy.",
+      "its relationship to the coronary arteries provides a natural contrast for vessel visualization.",
+      "it serves as a useful anatomical landmark for locating cardiac structures.",
+      "abnormal infiltration or displacement of fat can indicate specific cardiomyopathies.",
+      "the presence of significant amounts may be associated with metabolic syndrome.",
+      "it typically provides a cushioning and protective role for the heart.",
+      "its distribution pattern can vary based on age, sex, and body mass index.",
+      "pericardial effusions may displace cardiac fat, altering its typical appearance.",
+      "focal areas of fat within the myocardium can represent fatty infiltration.",
+      "its relative abundance can sometimes obscure smaller coronary artery branches.",
+      "it is generally non-enhancing on contrast-enhanced CT scans.",
+      "changes in its quantity over time may correlate with changes in body weight or disease progression.",
+      "the fat within the pericardial reflections is also considered cardiac fat."
+    ]
+  },
+  "Plaque": {
+    "ContextSettingSentences": [
+      "In CT images, Plaque is typically observed as",
+      "On a CT scan, Plaque is characterized by",
+      "When visualized with CT, Plaque appears as",
+      "A CT examination reveals Plaque to be",
+      "CT imaging clearly depicts Plaque as"
+    ],
+    "DescriptionPhrases": [
+      "a focal thickening or lesion within the arterial wall, often protruding into the lumen.",
+      "classified as calcified (high attenuation), non-calcified (intermediate attenuation), or mixed.",
+      "located predominantly within the coronary artery walls, but can be found in other vessels.",
+      "showing varying degrees of luminal narrowing depending on its size and morphology.",
+      "with well-defined or irregular borders, indicating its stability or vulnerability.",
+      "its volume and burden can be quantitatively assessed for disease severity.",
+      "any rapid progression in size or new development is clinically significant.",
+      "its relationship to the vessel lumen helps in determining stenosis severity.",
+      "the presence of remodeling (positive or negative) can be identified in the vessel wall.",
+      "abnormalities in its attenuation characteristics may suggest specific plaque components (e.g., lipid-rich core).",
+      "it serves as a key indicator of atherosclerosis and cardiovascular risk.",
+      "CT angiography allows for detailed visualization of its morphology and impact on blood flow.",
+      "quantification of calcified plaque (calcium score) is a standard assessment on non-contrast CT.",
+      "changes in its characteristics over time can indicate plaque progression or regression.",
+      "the presence of high-risk features, such as low attenuation or spotty calcification, is noteworthy.",
+      "it is a critical focus in diagnosing and managing coronary artery disease.",
+      "multiplanar reconstructions (MPR) and volume rendering (VR) aid in its comprehensive evaluation.",
+      "the absence of plaque indicates a very low probability of future cardiac events.",
+      "it can lead to significant stenosis, causing myocardial ischemia.",
+      "its location and extent are important for treatment planning, including revascularization."
+    ]
+  }
+  
+}

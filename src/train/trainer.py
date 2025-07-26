@@ -24,29 +24,28 @@ class CLIPTrainer(Trainer):
     ):
         inputs['step'] = self.state.global_step
         outputs = model(**inputs)
-        """
-         ret = {
-            "loss": loss,
-            "logits": logits,
-            "siglip_fg": siglip_fg,
-            "siglip_fuse": siglip_fuse,
-            "sim": limit
-        }
-        """
         loss = outputs["loss"]
+        
 
-        if is_rank_zero():
-            wandb.log(
-                {
-                    "train/loss": loss.item(),
-                    'train/SigLIP/Foreground': outputs['siglip_fg'].item(),
-                    "train/SigLIP/Fusion": outputs['siglip_fuse'].item(),
-                    "train/similiar": outputs['sim'].item(),
-                    "train/learning_rate": self.lr_scheduler.get_last_lr()[0],
-                    "train/step": self.state.global_step,
-                },
-                step=self.state.global_step,
-            )
+        if not is_rank_zero():
+            return (loss, outputs) if return_outputs else loss
+        is_branch_siglip = any(k in outputs for k in ['siglip_fg', 'siglip_fuse', 'sim'])
+        wlog_pack = {
+                "train/loss": loss.item(),
+                "train/learning_rate": self.lr_scheduler.get_last_lr()[0],
+                "train/step": self.state.global_step,
+        }
+        if is_branch_siglip:
+            wlog_pack.update({
+                'train/SigLIP/Foreground': outputs['siglip_fg'].item(),
+                "train/SigLIP/Fusion": outputs['siglip_fuse'].item(),
+                "train/similiar": outputs['sim'].item()
+            })
+
+        wandb.log(
+            wlog_pack,
+            step=self.state.global_step,
+        )
 
         return (loss, outputs) if return_outputs else loss
 
@@ -81,3 +80,29 @@ class MLLMTrainer(Trainer):
             )
 
         return (loss, outputs) if return_outputs else loss
+
+
+class PromptTrainer(Trainer):
+    def compute_loss(
+        self, model, inputs, return_outputs=False, num_items_in_batch=None
+    ):
+        if 'image-file' in inputs:
+            image_file = inputs.pop('image-file')
+        if 'label-file' in inputs:
+            label_file = inputs.pop('label-file')
+
+        outputs = model(**inputs)
+        loss = outputs["loss"]
+
+        if is_rank_zero():
+            wandb.log(
+                {
+                    "train/loss": loss.item(),
+                    "train/learning_rate": self.lr_scheduler.get_last_lr()[0],
+                    "train/step": self.state.global_step,
+                },
+                step=self.state.global_step,
+            )
+
+        return (loss, outputs) if return_outputs else loss
+    

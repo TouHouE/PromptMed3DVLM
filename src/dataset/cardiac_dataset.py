@@ -151,7 +151,9 @@ class CardiacDataset(Dataset, ABC):
         if self.usage_size < 0:
             return len(self.data_list[:int(self.usage_size)])
         return int(self.usage_size)
-        
+    
+    def print_actual_size(self):
+        print(f'size: {len(self.data_list)}')
 
 
 class VQACardiacDataset(CardiacDataset):
@@ -383,7 +385,7 @@ class Stage2Dataset(Dataset):
         print("Each Dataset size:")
         
         for ds_name, ds in zip(['vqa', 'caption', 'template'], ds_list):
-            print(f' - {ds_name:10}: {len(ds)}')
+            print(f' - {ds_name:10}: {len(ds)}|{ds.print_actual_size()}')
 
         self.dataset = ConcatDataset(ds_list)
 

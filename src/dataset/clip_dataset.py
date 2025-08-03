@@ -37,7 +37,7 @@ class CardiacCLIPDataset(Dataset):
 
     def __init__(
             self, args, tokenizer: HFT.PreTrainedTokenizer,
-            mode: Literal['train', 'val', 'test']="train", test_size=1000
+            mode: Literal['train', 'val', 'test']="train", test_size=1000, p_value_batch_idx=None
     ):
         """
         Initializes the CardiacCLIPDataset with the given parameters.
@@ -100,7 +100,7 @@ class CardiacCLIPDataset(Dataset):
         elif mode == 'validation':
             self.transform = val_transform
             self.data_list = self.data_list[:512]
-        elif 'test' in mode:
+        elif 'test' in mode and not getattr(args, 'calculate_p_value', False):
             self.transform = val_transform
             tmp_data_list = list()
             cnt = 0
@@ -115,8 +115,31 @@ class CardiacCLIPDataset(Dataset):
                     continue
                 tmp_data_list.append(pack)
             print(f"Drop {cnt} data")
-            self.data_list = tmp_data_list            
+            self.data_list = tmp_data_list
             self.data_list = self.data_list[:test_size]
+        elif mode == 'test' and getattr(args, 'calculate_p_value', False):  
+            self.transform = val_transform          
+            self.data_list = UIO.load_json(args.p_value_json)
+            self.__p_value_batch = len(self.data_list)
+            self.data_list = self.data_list[p_value_batch_idx]
+            tmp_data_list = list()
+            cnt = 0
+            for pack in self.data_list:
+                _pack = dcp(pack) 
+                _pack['label'] = random.sample(
+                    list(set(_pack['mask_pool'])), 1
+                )[0]
+                _pack = UIO.load_make_sure_exists(_pack)
+                if _pack is None or 'label' not in _pack:
+                    cnt += 1
+                    continue
+                tmp_data_list.append(pack)
+            print(f"Drop {cnt} data")
+            self.data_list = tmp_data_list
+
+    @property
+    def p_value_batch(self) -> int:
+        return self.__p_value_batch
 
     def __len__(self):
         # if self.mode == 'train':

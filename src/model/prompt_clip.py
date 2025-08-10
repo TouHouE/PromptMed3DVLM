@@ -101,7 +101,7 @@ class PromptCLIP(PreTrainedModel):
         self.local_loss = config.local_loss
         self.gather_loss = config.gather_loss
         self.loss_type = config.loss_type
-        self.limit_loss_type = config.limit_loss_type
+        self.limit_loss_type = getattr(config, "limit_loss_type", 'huber')
         logger.debug(f'limit_loss_type: {self.limit_loss_type}')
 
         if self.limit_loss_type == 'huber':

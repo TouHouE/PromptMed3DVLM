@@ -377,18 +377,18 @@ def get_image_loader_from_args(args):
     return MT.Compose(basic + [MT.ToTensord(keys=['image', 'label'], allow_missing_keys=True)])
 
 
-def make_tqdm_status(args):
-    if 'cap' in args.data_json_path:    # TODO: Task should using `--task` to decision
-        task: str = 'RG'
-    else:
-        task: str = 'VQAv1' if 'v2' not in args.data_json_path else 'VQAv2'
+# def make_tqdm_status(args):
+#     if 'cap' in args.data_json_path:    # TODO: Task should using `--task` to decision
+#         task: str = 'RG'
+#     else:
+#         task: str = 'VQAv1' if 'v2' not in args.data_json_path else 'VQAv2'
     
-    if args.system_prompt.lower() == 'true':
-        sys: str = 'Def'
-    elif args.system_prompt.lower() == 'false':
-    mask: bool = args.mask_prompt
-    chat: bool = args.chat_mode
-    model_name: str = args.model_name.split('/')[-1].replace('_merged', '')
+#     if args.system_prompt.lower() == 'true':
+#         sys: str = 'Def'
+#     elif args.system_prompt.lower() == 'false':
+#     mask: bool = args.mask_prompt
+#     chat: bool = args.chat_mode
+#     model_name: str = args.model_name.split('/')[-1].replace('_merged', '')
     
 
 

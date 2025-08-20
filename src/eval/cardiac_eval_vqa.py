@@ -14,6 +14,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import peft as HFP
 from monai import transforms as mtf
 import accelerate as HFA
 import deepspeed
@@ -47,6 +48,13 @@ def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model_name_or_path", type=str, default="./models/Med3DVLM-Qwen-2.5-7B"
+    )
+    
+    parser.add_argument(
+        '--with_lora', type=bool, action='store_true', default=False, help="Whether to use LoRA or not."
+    )
+    parser.add_argument(
+        '--lora_config', type=str, required=False, default=None, help='Path to a json config file for LoRA, if not set, will ignore LoRA'
     )
     parser.add_argument(
         '--apply_mask_prompt', action='store_true', default=False, help="Only enable when PromptEncoder in VLM."

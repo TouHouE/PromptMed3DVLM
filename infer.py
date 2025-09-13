@@ -1,3 +1,27 @@
+"""
+For inferencing the medical VLM. 
+Because of I hard coded the data path, so you need to modify the data path in method `load_make_sure_exists`.
+The data json format should be like:
+[
+    {
+        "pid": "patient_id",
+        "image": "image_name.nii.gz",
+        "conversations": [
+            {"from": "human", "value": "The query"},
+            {"from": "gpt", "value": "The standard answer"}
+        ],
+        "label": "mask_name.nii.gz", # If you dont have mask, please use some segmentation model to generate it. 
+            But this one could be optional.
+    },
+    ...
+]
+During method `load_make_sure_exists`, it will do 2 functions:
+1. Make sure the image and mask file exists. If not, it will return a None.
+2. Convert the relative path to absolute path.
+The absolute path is searched in several possible root path and mid path. 
+eg: <possible_root>/<mid_path>/<the target file name>
+"""
+
 import argparse
 import json
 import os
@@ -7,7 +31,7 @@ from copy import deepcopy
 from functools import partial
 from itertools import product
 from os.path import join, exists
-from typing import Optional
+from typing import Optional, Literal
 
 import evaluate
 import pandas as pd
@@ -17,9 +41,11 @@ import nibabel as nib
 import torch
 import transformers as HFT
 from monai import transforms as MT
+from monai.config.type_definitions import NdarrayOrTensor
 from tqdm.auto import tqdm
+from torch import nn
 
-from src.model.llm import VLMQwenForCausalLM
+from src.model.llm import VLMQwenForCausalLM, LamedLlamaForCausalLM
 from src.dataset import prompt_templates as PT
 
 DEBUG: bool = os.environ.get("DEBUG", "0") == "1"
@@ -60,7 +86,7 @@ def making_query(query: str, args: argparse.Namespace) -> str:
 
     convs.append({'role': 'user', 'content': "<im_patch>" * 256 + query})
     
-    chat = tokenizer.apply_chat_template(convs, tokenize=False, add_generation_prompt=True)
+    chat: str = tokenizer.apply_chat_template(convs, tokenize=False, add_generation_prompt=True)
     return chat
 
 
@@ -136,7 +162,7 @@ def load_make_sure_exists(pack):
     return None
 
 
-def slice_scaler(pack, scaler):
+def slice_scaler(pack: dict | NdarrayOrTensor, scaler: callable):
     is_dict = isinstance(pack, dict)
     if is_dict:
         if 'image' not in pack:
@@ -174,14 +200,26 @@ def nnunet_scaler(pack):
     return pack
 
 
-def load_model(dst_model_name):
-    try:
-        __model = HFT.AutoModelForCausalLM.from_pretrained(dst_model_name, torch_dtype=torch.bfloat16,
-                                                           device_map='auto', trust_remote_code=True)
-        print(f'Loading from AutoModel')
-    except Exception as _:
-        __model = VLMQwenForCausalLM.from_pretrained(dst_model_name, torch_dtype=torch.bfloat16, device_map='auto')
-        print('Loading from VLMQwenForCausalLM')
+def load_model(dst_model_name: str, auto_loading=True) -> HFT.PretrainedModel | nn.Module:
+    """
+        Don't apply `auto_loading`
+    """
+    if auto_loading:
+        try:
+            __model = HFT.AutoModelForCausalLM.from_pretrained(dst_model_name, torch_dtype=torch.bfloat16,
+                                                            device_map='auto', trust_remote_code=True)
+            print(f'Loading from AutoModel')
+        except Exception as _:
+            return load_model(dst_model_name, auto_loading=False)
+    if 'plamed' in load_json(join(dst_model_name, 'config.json'))['model_type']:
+        llm_class = LamedLlamaForCausalLM        
+    else:
+        llm_class = VLMQwenForCausalLM
+
+    print(f'Current LLM class: {llm_class.__name__}')
+    # __model = VLMQwenForCausalLM.from_pretrained(dst_model_name, torch_dtype=torch.bfloat16, device_map='auto')
+    __model = llm_class.from_pretrained(dst_model_name, torch_dtype=torch.bfloat16, device_map='auto')
+    
     return __model
 
 
@@ -301,16 +339,16 @@ def asking(
     }
 
 
-def load_json(path):
+def load_json(path) -> list[dict] | dict:
     with open(path, 'r', encoding='utf-8') as loader:
         return json.load(loader)
 
 
-def load_data_json(args):
+def load_data_json(args) -> list[dict]:
     return load_json(args.data_json_path)    
 
 
-def load_exists_eval(args):
+def load_exists_eval(args) -> list[dict[str, any]]:
     tmp_eval = join(args.output_dir, args.output_name.replace(".json", '.jsonl'))
     if not exists(tmp_eval):
         return list()
@@ -319,78 +357,40 @@ def load_exists_eval(args):
         return [json.loads(line) for line in loader.readlines()]
 
 
-def get_image_loader_from_args(args):
+def get_image_loader_from_args(args) -> MT.Compose:
     print(args.loader_type)
+    scaler_type, arch_type, shaper_type = args.loader_type.split('-')
     basic = [
         MT.LoadImaged(keys=['image', 'label'], allow_missing_keys=True, image_only=True),
         MT.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cuda'),
         MT.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
         MT.Orientationd(axcodes="RAS", keys=['image', 'label'], allow_missing_keys=True)
     ]
-    if args.loader_type == 'unet-med3d':
+    image_zoom_mode = 'trilinear'    
+    # Normalization Preprocessing Strategy
+    if scaler_type == 'unet':   # Following nnUNetv2's CTNormalization.
+        basic.append(MT.Lambda(nnunet_scaler))
+    elif scaler_type == 'minmax':   # Directly normalize to [0, 1]
+        basic.append(MT.ScaleIntensityd(key=['image'], allow_missing_keys=True))
+    elif scaler_type == 'jpeg': # For simulate convert dicom slice to jpeg and normalize to [0, 1]
+        image_zoom_mode = 'bilinear'
         basic.extend([
-            MT.Lambda(nnunet_scaler),
-            MT.Zoomd(zoom=0.5,
-                     mode=('trilinear', 'nearest'), keys=['image', 'label'],
-                     allow_missing_keys=True
-                     ),
-            MT.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), keys=['image', 'label'], allow_missing_keys=True)
-        ])
-    elif args.loader_type == 'minmax-med3d-zoom':
-        basic.extend([
-            MT.ScaleIntensityd(keys=['image'], allow_missing_keys=True),
-            MT.Zoomd(zoom=0.5,
-                     mode=('trilinear', 'nearest'), keys=['image', 'label'],
-                     allow_missing_keys=True
-                     ),
-            MT.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), keys=['image', 'label'], allow_missing_keys=True),
-        ])
-    elif args.loader_type == 'minmax-med3d-crop':
-        basic.extend([
-            MT.ScaleIntensityd(keys=['image'], allow_missing_keys=True),
-            MT.Spacingd(keys=['image', 'label'], mode=('trilinear', 'nearest'), pixdim=(.39, .39, .625), allow_missing_keys=True),
-            MT.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), keys=['image', 'label'], allow_missing_keys=True)
-        ])
-    elif args.loader_type == 'jpeg-med3d':
-        basic.extend([
-            MT.Lambda(partial(slice_scaler, scaler=MT.ScaleIntensity(0, 255, dtype=torch.int8))),
-            MT.Lambda(partial(slice_scaler, scaler=MT.ScaleIntensity(dtype=torch.float))),
-            MT.Zoomd(zoom=0.5,
-                     mode=('bilinear', 'nearest'), keys=['image', 'label'],
-                     allow_missing_keys=True
-                     ),
-            MT.ResizeWithPadOrCropd(spatial_size=(256, 256, 128), keys=['image', 'label'], allow_missing_keys=True)
-        ])
-    elif args.loader_type == 'm3d':
-        basic.extend([
-            MT.Lambda(partial(slice_scaler, scaler=MT.ScaleIntensity(0, 255, dtype=torch.int8))),
-            MT.Lambda(partial(slice_scaler, scaler=MT.ScaleIntensity())),
-            MT.Orientationd(axcodes="SRA", keys=['image', 'label'], allow_missing_keys=True),
-            MT.Zoomd(zoom=0.5,
-                     mode=('bilinear', 'nearest'), keys=['image', 'label'],
-                     allow_missing_keys=True
-                     ),
-            MT.ResizeWithPadOrCropd(spatial_size=(32, 256, 256), keys=['image', 'label'], allow_missing_keys=True)
-        ])
+            MT.Lambda(partial(slice_scaler, scaler=ScaleIntensity(0, 255, dtype=torch.uint8))),
+            MT.Lambda(partial(slice_scaler, scaler=ScaleIntensity(dtype=torch.float)))
+        ])        
     else:
-        raise NotImplementedError(f"Loader-Type: {args.loader_type} not exists.")
+        raise NotImplementedError()
+    
+    # Shaping Preprocessing Strategy
+    if shaper_type in ['zoom', 'resize']:        
+        basic.append(MT.Zoomd(zoom=.5, mode=(image_zoom_mode, 'nearest'), keys=['image', 'label'], allow_missing_keys=True))        
+    if arch_type == 'med3d':
+        basic.append(MT.ResizeWithPadOrCropd(keys=['image', 'label'], allow_missing_keys=True, spatial_size=(256, 256, 128)))
+    elif arch_type == 'm3d':    
+        basic.append(MT.ResizeWithPadOrCropd(keys=['image', 'label'], allow_missing_keys=True, spatial_size=(256, 256, 32)))
+        basic.append(MT.Orientationd(keys=['image', 'label'], axcodes='SRA'))
+    
     return MT.Compose(basic + [MT.ToTensord(keys=['image', 'label'], allow_missing_keys=True)])
-
-
-# def make_tqdm_status(args):
-#     if 'cap' in args.data_json_path:    # TODO: Task should using `--task` to decision
-#         task: str = 'RG'
-#     else:
-#         task: str = 'VQAv1' if 'v2' not in args.data_json_path else 'VQAv2'
-    
-#     if args.system_prompt.lower() == 'true':
-#         sys: str = 'Def'
-#     elif args.system_prompt.lower() == 'false':
-#     mask: bool = args.mask_prompt
-#     chat: bool = args.chat_mode
-#     model_name: str = args.model_name.split('/')[-1].replace('_merged', '')
-    
-
 
 
 def main(args):
@@ -408,16 +408,13 @@ def main(args):
         model = load_model(args.model_name)
     tokenizer = HFT.AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
     image_loader = get_image_loader_from_args(args)
-    data_list = load_data_json(args)
-    data_list = regular_all_type_ds_into_vqa(data_list)    
-    result_list = load_exists_eval(args)
+    data_list: list[dict[str, str]] = load_data_json(args)
+    data_list: list[dict[str, str]] = regular_all_type_ds_into_vqa(data_list)    
+    result_list: list[dict[str, str | int | float]] = load_exists_eval(args)
     exists_pool: list[tuple[str, str, int]] = [(rpack['Question'], rpack['Answer'], rpack.get("ID", -1)) for rpack in result_list]    
     last_name = args.model_name.split('/')[-1].replace("_merged", "")
-    if 'cap' in args.data_json_path:
-        task = 'RG'
-    else:
-        task = "VQA"
     
+    task: Literal["RG", "VQA"] = 'RG' if 'cap' in args.data_json_path else 'VQA'        
     
     pbar = tqdm(
         enumerate(data_list), total=len(data_list), 
@@ -514,9 +511,9 @@ if __name__ == '__main__':
     parser.add_argument('--task', type=str, choices=['caption', 'vqa', 'bbox'])
     parser.add_argument('--mask_prompt', action='store_true', default=False)
     parser.add_argument('--chat_mode', action='store_true', default=False)
-    parser.add_argument('--system_prompt', type=str, default="False")
+    parser.add_argument('--system_prompt', type=str, default="False", help="For using default system prompt, set it to `True`. If you don't want to use any system prompt, set it to `True`. Or you can provide a path to load your custom system prompt.")
     parser.add_argument('--taks_name', type=str, default=None, choices=['pos'])
-    parser.add_argument('--local_rank')
+    parser.add_argument('--local_rank', help='Ignore this')
     args = parser.parse_args()
     print(f'Your config: \n{json.dumps(vars(args), indent=2)}')
     main(args)

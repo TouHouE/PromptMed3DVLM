@@ -15,6 +15,7 @@ import wandb
 from src.dataset.mllm_dataset import CapDataset, TextDatasets, TextYNDatasets, CardiacDataset
 from src.dataset.cardiac_dataset import Stage_0_1_Dataset, Stage2Dataset
 from src.model.llm.qwen import VLMQwenForCausalLM
+from src.model.llm.lamed_llama import LamedLlamaForCausalLM, LamedConfig
 from src.model.encoder.prompt_dcformer import PromptDCFormerConfig
 from src.train.trainer import MLLMTrainer
 
@@ -68,11 +69,20 @@ class ModelArguments:
     """
         Which part should freeze
     """
-    freeze_backbone: bool = field(default=False)    # For LLM
-    freeze_vision_tower: bool = field(default=False)    # For Vision Encoder
-    freeze_prompt_encoder: bool = field(default=False)  # For my custom module.
+    freeze_backbone: bool = field(default=False, metadata={
+        'help': """True: Freeze whole LLM weights, but not included embed layer. 
+        False: For whole weight finetune."""
+    })    # For LLM
+    freeze_vision_tower: bool = field(default=False, metadata={
+        'help': "True for freeze vision encoder(include prompt encoder if exists.)"
+    })    # For Vision Encoder
+    freeze_prompt_encoder: bool = field(default=False, metadata={
+        'help': "True for freeze the prompt encoder if exists, if wanna tune this module w/o vision encoder this must setting to False."
+    })  # For my custom module.
 
-    pretrain_mllm: Optional[str] = field(default=None)
+    pretrain_mllm: Optional[str] = field(default=None, metadata={
+        'help': 'A path point to the VLM pretrained checkpoint'
+    })
     pretrain_mllm_with_lora: Optional[str] = field(default=None)
     
     tune_vision_encoder: bool = field(
@@ -90,10 +100,11 @@ class ModelArguments:
     )
     
     # image
-    input_size: tuple = field(default=(256, 256, 128))
-    patch_size: int = field(default=(16, 16, 16))
+    input_size: list[int] = field(default_factory=lambda: (256, 256, 128))
+    patch_size: list[int] = field(default_factory=lambda: (16, 16, 16))
     dim: int = field(default=768)
     depth: int = field(default=12)
+    
 
     # vision
     vision_tower: Optional[str] = field(default="dcformer")
@@ -102,18 +113,34 @@ class ModelArguments:
     pretrain_vision_model: str = field(
         default=None, metadata={"help": "Path to pretrained model for ViT."}
     )
-    pretrain_vision_model_status: str = field(
-        default="dcformer"
+    pretrain_vision_model_status: str = field(default="dcformer", metadata={
+        'help': 'Use to decide the vision checkpoint loading method.'
+    }
     )
     pretrain_clip_model: str = field(
         default=None, metadata={"help": "Path to pretrained model for CLIP."}
     )
+    prompt_hidden_size: Optional[int] = field(
+        default=None, metadata={
+            "help": "This argument is only for M3D series VLM. This is for hidden_size_adapter."
+        }
+    )    
+    downsample: bool = field(default=False)
     # projector
     mm_projector_type: Optional[str] = field(default="mlp")
+    proj_layer_type: str = field(default='mlp')
+    proj_layer_num: int = field(default=2, metadata={
+        'help': "This argument is only for M3D series VLM."
+    })
+    proj_pooling_size: int = field(default=2, metadata={
+        'help': "This argument is only for M3D series VLM."
+    })
+    proj_pooling_type: str = field(default='spatial', metadata={
+        'help': 'This argument is only for M3D series VLM.'
+    })
     mm_mlp_depth: int = field(
         default=2, metadata={"help": "Depth of MLP in projector."}
     )
-
     low_output_size: List[int] = field(
         default_factory=lambda: [192, 128],
         metadata={"help": "Output size of low feature."},
@@ -121,8 +148,12 @@ class ModelArguments:
     high_output_size: List[int] = field(
         default_factory=lambda: [64, 128],
         metadata={"help": "Output size of high feature."},
-    )
-
+    )    
+    # Here is for the segmentation prediction head config
+    # This configuration for now only service for M3D series VLM
+    segmentation_module: str = field(default='segvol', metadata={
+        'help': 'This argument is only for M3D series VLM.'
+    })
     ## Here are my custom model.
     # is already on above, abandad this config.
     # input_size: Sequence[int] = (512, 512, 256)
@@ -142,7 +173,10 @@ class ModelArguments:
     block_types: Sequence[Literal["C", "T"]] = ("C", "C", "C", "C")
     codebook_size: int = 8192
     model_size: Optional[Literal["tiny", "base", "small", "large"]] = None
-
+    
+    def __post_init__(self):
+        self.proj_layer_type = self.mm_projector_type
+        # self.mlp_dim = self.dim
 
 @dataclass
 class DataArguments:
@@ -503,7 +537,7 @@ def main():
         or model_args.mm_projector_type == "mhsa"
     ):
         model_args.proj_out_num = 32
-    else:
+    elif model_args.model_type == 'vlm_qwen':
         model_args.proj_out_num = 256
 
 
@@ -513,6 +547,12 @@ def main():
         if "qwen" in model_args.model_type:
             model = VLMQwenForCausalLM.from_pretrained(
                 model_args.model_name_or_path, cache_dir=training_args.cache_dir, trust_remote_code=True
+            )
+        elif 'plamed' in model_args.model_type:
+            cfg = LamedConfig.from_pretrained(model_args.model_name_or_path)
+            cfg.vision_tower = 'm3dvit'
+            model = LamedLlamaForCausalLM.from_pretrained(
+                model_args.model_name_or_path, config=cfg, cache_dir=training_args.cache_dir, trust_remote_code=True
             )
         else:
             raise ValueError(f"Unknown Model Type {model_args.model_type}")
@@ -530,9 +570,17 @@ def main():
     if training_args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
 
+    # breakpoint()
     if model_args.vision_tower is not None:
         model_args.vision_tower_config = get_prompt_config(model_args)
-        model.get_model().initialize_vision_modules(model_args=model_args)
+        if model.config.vision_tower != model_args.vision_tower and 'lamed' in model_args.model_type.lower():        
+            model.get_model().initialize_vision_modules(
+                model_args=model_args, change_vision_tower=True
+            )
+        else:
+            model.get_model().initialize_vision_modules(
+                model_args=model_args
+            )
 
     model.config.tune_mm_mlp_adapter = training_args.tune_mm_mlp_adapter = (
         model_args.tune_mm_mlp_adapter

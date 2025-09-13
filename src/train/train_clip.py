@@ -19,6 +19,7 @@ from src.dataset.clip_dataset import CLIPDataset, CardiacCLIPDataset
 from src.model.CLIP import DEC_CLIP, DEC_CLIPConfig
 from src.model.prompt_clip import PromptCLIPConfig, PromptCLIP
 
+
 LOG_MSG_FMT: Final[str] = '%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s'
 LOG_DATE_FMT: Final[str] = '%Y-%m-%d %H:%M:%S'
 
@@ -61,17 +62,25 @@ class ModelArguments:
 
     pretrained_model: str = field(default=None)
     load_from_dcformer: bool = field(default=True)
-
-    input_size: tuple = field(default=(256, 256, 128))
+    # (32, 256, 256) for M3D-CLIP, (256, 256, 128) for SigLIP
+    input_size: list[int] = field(default_factory=lambda: [32, 256, 256])
+    # Start from this line, those will use in declare a M3DViT
+    patch_size: list[int] = field(default_factory=lambda: [4, 16, 16])
     dim: int = field(default=768)
     depth: int = field(default=12)
     hidden_size: int = field(default=768)
+    prompt_hidden_size: int = field(default=2048)
+    m3d_hidden_size: int = field(default=768)
     mlp_depth: int = field(default=2)
+    pos_embed: str = field(default="perceptron")
+    classification: bool = field(default=True)
+    image_channel: int = field(default=1)
 
     vision_encoder: Optional[str] = field(default="dcformer")
     loss_type: str = field(default="nce")
     limit_loss_type: str = field(default='huber')
     siglip_margin: float = field(default=0.1)
+
 
 @dataclass
 class DataArguments:
@@ -237,7 +246,7 @@ def main():
     data_args: DataArguments
     training_args: TrainingArguments
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-
+    setattr(data_args, 'input_size', model_args.input_size)
     for key in ['fg', 'fuse', 'limit']:
         setattr(model_args, f'{key}_lambda', getattr(training_args, f'{key}_lambda'))
 
@@ -271,30 +280,38 @@ def main():
 
     print('=' * 10 + "Model Preparation" + '=' * 10)
     tokenizer = AutoTokenizer.from_pretrained(model_args.language_model_name_or_path)
-    if model_args.vision_encoder == 'dcformer':
+    prompt_state_key = [
+        'prompt_dcformer', 'mask_prompt_dcformer', 'prompt', 'mask_prompt'
+    ]
+    if "prompt" not in model_args.vision_encoder:
+        print(f"Current argument `vision_encoder` are: \"{model_args.vision_encoder}\", Cause keyword `prompt` not in `vision_encoder`, the target model will be: DEC_CLIP")
         config = DEC_CLIPConfig.from_dict(vars(model_args))
         model = DEC_CLIP(config)
-    elif model_args.vision_encoder in ['prompt_dcformer', 'mask_prompt_dcformer']:
+    elif any(prompt_name in model_args.vision_encoder for prompt_name in prompt_state_key):
         config = PromptCLIPConfig.from_dict(vars(model_args))
-        model = PromptCLIP(config)
+        model = PromptCLIP(config)    
     else:
         raise NotImplementedError(f"Unexpected vision encoder: {model_args.vision_encoder}")
 
-    if model_args.pretrained_model:
+    if model_args.pretrained_model: # Pretraned model will be loaded fully vision and language encoder
         # ckpt = torch.load(model_args.pretrained_model)
         ckpt = load_file(model_args.pretrained_model)
         vit_dict = dict()
         other_dict = dict()
         key_not_in_model, key_not_in_ckpt = model.load_state_dict(ckpt, strict=False)
+
         print(key_not_in_model)
 
-        if model_args.vision_encoder in ['prompt_dcformer', 'mask_prompt_dcformer'] and model_args.load_from_dcformer:
+        if any(model_args.vision_encoder in prompt_name for prompt_name in prompt_state_key) and model_args.load_from_dcformer:
             for key, value in ckpt.items():
                 if 'vision_encoder' in key:
                     vit_dict[key.replace("vision_encoder.", "")] = value
                 else:
                     other_dict[key] = value
-            model.vision_encoder.load_dcformer_state(vit_dict)
+            if hasattr(model.vision_encoder, 'load_dcformer_state'):
+                model.vision_encoder.load_dcformer_state(vit_dict)
+            else:
+                model.vision_encoder.load_backbone_state(vit_dict)
         
         # key_in_model, key_in_ckpt = model.load_state_dict(ckpt, strict=False)
         # assert len(key_in_model) == 0, "The ckpt should contains all of parameter for model"

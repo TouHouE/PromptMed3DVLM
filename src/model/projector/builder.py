@@ -2,6 +2,7 @@ import torch.nn as nn
 
 from .mhsa import MultiHeadSelfAttention
 from .mlp import LowHighHybridMLP, MixerLowHighHybridMLP, MultiModalProjector
+from .spp import SpatialPoolingProjector
 
 
 class IdentityMap(nn.Module):
@@ -53,6 +54,17 @@ def build_mm_projector(config, delay_load=False, **kwargs):
             output_dim=config.hidden_size,
             num_heads=hasattr(config, "num_heads") and config.num_heads or 8,
             proj_out_num=config.proj_out_num,
+        )
+    elif projector_type == 'spp':
+        return SpatialPoolingProjector(
+            image_size=config.image_size,
+            patch_size=config.patch_size,
+            in_dim=config.mm_hidden_size,
+            out_dim=config.hidden_size,
+            layer_type=config.proj_layer_type,
+            layer_num=config.proj_layer_num,
+            pooling_type=config.proj_pooling_type,
+            pooling_size=config.proj_pooling_size
         )
     elif projector_type == "identity":
         return IdentityMap()

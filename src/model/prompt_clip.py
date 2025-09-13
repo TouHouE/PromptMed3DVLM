@@ -18,8 +18,10 @@ from src.model.encoder.dcformer import (
     decomp_small,
     decomp_tiny,
 )
+from src.model.encoder.utils import wrap_matched_keys
 from src.model.encoder.vit import Vit3D
 from src.model.encoder.prompt_dcformer import PromptDCFormerConfig, MaskPromptDCFormer
+from src.model.encoder.prompt_m3dvit import MaskPromptM3DViT, MaskPromptM3DViTConfig
 from src.model.projector.mlp import MultiLayerPerceptron
 
 try:
@@ -76,12 +78,18 @@ class PromptCLIP(PreTrainedModel):
         super().__init__(config)
 
         self.config = config
-        if config.prompt_encoder == 'mask':
-            self.vision_encoder = MaskPromptDCFormer(PromptDCFormerConfig.small_config(input_size=config.input_size))
-        elif config.prompt_encoder in ['point', 'full']:
-            raise NotImplementedError(f'Waiting for implement...')
+
+        if 'dcformer' in config.vision_encoder:
+            self.vision_encoder = MaskPromptDCFormer(
+                PromptDCFormerConfig.small_config(input_size=config.input_size)
+            )
+        elif 'm3dvit' in config.vision_encoder:
+            self.vision_encoder = MaskPromptM3DViT(
+                MaskPromptM3DViTConfig(**wrap_matched_keys(config, MaskPromptM3DViTConfig))
+            )   
         else:
-            raise ValueError(f"Unexpected vision encoder: {config.vision_encoder}")        
+            raise ImplementationError(f"Unexpected vision encoder: {config.vision_encoder}")
+        logger.debug(f"\n{self.vision_encoder}")
 
         self.language_encoder = AutoModel.from_pretrained(
             config.language_model_name_or_path
@@ -90,8 +98,12 @@ class PromptCLIP(PreTrainedModel):
         self.mm_vision_proj = nn.Linear(
             self.vision_encoder.channels[-1], config.hidden_size
         )
+        if hasattr(self.language_encoder.config, 'dim'):
+            lang_in_features = self.language_encoder.config.dim
+        else:
+            lang_in_features = self.language_encoder.config.hidden_size
         self.mm_language_proj = nn.Linear(
-            self.language_encoder.config.dim, config.hidden_size
+            lang_in_features, config.hidden_size
         )
         self.mm_fuse_proj = nn.Linear(
             self.vision_encoder.channels[-1], config.hidden_size
@@ -125,8 +137,12 @@ class PromptCLIP(PreTrainedModel):
         """
             This method will only usage when doing inference.
         """
+
+
         if not do_mask:
-            feats = self.vision_encoder.dcformer(image)
+            feats = getattr(self.vision_encoder, 'dcformer', self.vision_encoder.backbone)(image)
+            if isinstance(feats, tuple) and not all(torch.is_tensor(_feat) for _feat in feats):
+                feats = feats[1]                
             _mm_proj = self.mm_vision_proj
         else:
             feats = self.vision_encoder(image, masks=masks)
@@ -147,7 +163,11 @@ class PromptCLIP(PreTrainedModel):
         if image_fg is None and not self.training:    # For inference, when only given `image` and masks
             return self.infer_encode_image(image, masks, do_mask)
         fuse_feats = self.vision_encoder(image, masks)
-        image_feats = self.vision_encoder.dcformer(image_fg)
+        if hasattr(self.vision_encoder, 'dcformer'):
+            image_feats = self.vision_encoder.dcformer(image_fg)
+        else:
+            # last_feats and all stage feats
+            _, image_feats = self.vision_encoder.backbone(image_fg)
 
         if self.limit_loss_type == 'kld':
             limit = self.sim_loss(torch.softmax(fuse_feats[-1], dim=-1), torch.softmax(image_feats[-1], dim=-1))

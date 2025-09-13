@@ -78,11 +78,16 @@ class CardiacCLIPDataset(Dataset):
 
         print(json.dumps(vars(args), indent=2))
         loader_comp = UT.get_loader(args)
-
         self.loader = mtf.Compose(loader_comp)
+        if getattr(args, 'loader_type').split('-')[1] == 'm3d':
+            rot_axis = (1, 2)
+        else:
+            rot_axis = (0, 1)
+
+
         train_transform = mtf.Compose(
             [
-                mtf.RandRotate90d(prob=0.5, spatial_axes=(0, 1), keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
+                mtf.RandRotate90d(prob=0.5, spatial_axes=rot_axis, keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
                 mtf.RandFlipd(prob=0.10, spatial_axis=0, keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
                 mtf.RandFlipd(prob=0.10, spatial_axis=1, keys=['image', 'label', 'image_fg'], allow_missing_keys=True),
                 mtf.RandFlipd(prob=0.10, spatial_axis=2, keys=['image', 'label', 'image_fg'], allow_missing_keys=True),

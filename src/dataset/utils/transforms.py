@@ -3,6 +3,9 @@ import random
 import logging
 import json
 from typing import Iterable, Literal
+from functools import partial
+
+
 DEBUG: bool = os.environ.get("DEBUG", "0") == "1"
 logger = logging.getLogger(__name__)
 
@@ -12,8 +15,9 @@ import torch
 from monai import transforms as MT
 
 
-def debug(pack):
+def debug(pack, prefix: str = ''):    
     print("="*30)
+    print(prefix)
     for key, value in pack.items():
         if 'coord' in key:
             print(value)
@@ -63,37 +67,57 @@ def get_fg_loader(args) -> list[callable]:
         the load_kwargs only contains `keys` and `allow_missing_keys` 2 keys
         basically when `args.loader_type == 'unet-med3d-fgcrop' will get into here.
     """
-    comp: list[callable] = [
+    input_size = (256, 256, 128)
+    scaler_type, model_arch_type, shape_type = args.loader_type.split('-')
+    if scaler_type == 'unet':
+        scaler = MT.Lambda(nnunet_scaler)
+    elif scaler_type == 'jpeg':
+        scaler = PseudoJPEGScaleIntensity(keys=['image'])
+    elif scaler_type == 'minmax':
+        scaler = MT.ScaleIntensityd(keys=['image'])
+    else:
+        raise NotImplementedError(f"Unexpected scaler type: {scaler_type}")
+
+
+    stem: list[callable] = [
         MT.LoadImaged(keys=['image', 'label'], allow_missing_keys=True, image_only=True),
         # MT.EnsureTyped(keys=['image', 'label'], allow_missing_keys=True, device='cuda'),
         MT.EnsureChannelFirstd(keys=['image', 'label'], allow_missing_keys=True),
-        MT.Orientationd(axcodes='RAS', keys=['image', 'label'], allow_missing_keys=True),
-        MT.Spacingd(pixdim=(.39, .39, .625), keys=['image', 'label'], allow_missing_keys=True, mode=('trilinear', 'nearest'))
+        MT.Orientationd(axcodes='RAS', keys=['image', 'label'], allow_missing_keys=True),        
+        scaler
     ]
-    comp.append(MT.Lambda(nnunet_scaler))
-    comp.append(MT.Lambda(adding_new_keys))
+
+    if model_arch_type == 'm3d':
+        stem.append(MT.Orientationd(axcodes="SRA", keys=['image', 'label'], allow_missing_keys=True))
+        input_size = (32, 256, 256)
+    if shape_type in ['resize', 'zoom']:
+        stem.append(MT.Zoomd(zoom=.5, mode=('trilinear', 'nearest'), keys=['image', 'label'], allow_missing_keys=True))
+
+    stem.append(MT.Lambda(adding_new_keys))
+
     if DEBUG:
         comp.append(MT.Lambda(debug))
-    comp.append(
+    stem.append(
         DummyCropForeground(
             classes_range=[0, 10], source_key='mask_fg', keys=['image_fg', 'mask_fg'], allow_missing_keys=True, masking=args.masking
         )
     )
     if DEBUG:
         comp.append(MT.Lambda(debug))
-    comp.append(MixedResizer(
-        spatial_size=(256, 256, 128),
+         
+
+    stem.append(MixedResizer(
+        spatial_size=input_size ,
         padder_kwargs=dict(mode='constant', constant_values=0, method='end'),
         resizer_kwargs=dict(mode=('trilinear', 'trilinear', 'nearest'), size_mode='all'),
         keys=['image', 'image_fg', 'label'], allow_missing_keys=True
     ))
-    comp.append(MT.DeleteItemsd(keys=['mask_fg']))
-    comp.append(MT.ResizeWithPadOrCropd(keys=['image', 'label', 'image_fg'], spatial_size=(256, 256, 128), allow_missing_keys=True))
+    stem.append(MT.DeleteItemsd(keys=['mask_fg']))
+    stem.append(MT.ResizeWithPadOrCropd(keys=['image', 'label', 'image_fg'], spatial_size=input_size, allow_missing_keys=True))
     if DEBUG:
-        comp.append(MT.Lambda(debug))
-    comp.append(MT.ToTensord(keys=['image', 'label', 'image_fg']))
+        stem.append(MT.Lambda(debug))
 
-    return comp
+    return stem
 
 
 def get_normal_loader(args):
@@ -250,4 +274,5 @@ class PseudoJPEGScaleIntensity:
                 continue
             data[key] = self.on_slice(value)
         return data
+
 

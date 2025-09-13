@@ -16,6 +16,7 @@ from src.model.CLIP import *
 from src.model.prompt_clip import PromptCLIP
 
 
+
 def seed_everything(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -72,6 +73,7 @@ def parse_args(args=None):
     parser.add_argument("--test_topk", type=int, default=(1, 5, 10), nargs='+')
     parser.add_argument("--test_size", type=int, default=(100, 500, 1000, 2000), nargs='+')
     parser.add_argument('--move_to_cuda', type=bool, default=False)
+    parser.add_argument('--auto_model', action='store_true', default=False)
     return parser.parse_args(args)
 
 
@@ -148,16 +150,24 @@ def main():
     args = parse_args()
     print(args)
     device = torch.device(args.device)
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        # args.model_name_or_path,
-        "medicalai/ClinicalBERT",
-        model_max_length=args.max_length,
-        padding_side="right",
-        use_fast=False,
-    )
-    # try:
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.model_name_or_path,
+            model_max_length=args.max_length,
+            padding_side='right', use_fast=False
+        )
+    except Exception as e:
+        print(f'No tokenizer.json under `{args.model_name_or_path}`, back to defualt: `medicalai/ClinicalBERT`')
+        tokenizer = AutoTokenizer.from_pretrained(
+            # args.model_name_or_path,
+            "medicalai/ClinicalBERT",
+            model_max_length=args.max_length,
+            padding_side="right",
+            use_fast=False,
+        )
+    # try:    
     model: DEC_CLIP | PromptCLIP = AutoModel.from_pretrained(args.model_name_or_path, trust_remote_code=True)
+    # print(model)
     # except Exception as e:
     #     model = DEC_CLIP(DEC_CLIPConfig.from     
     model = model.to(device=device).eval()
@@ -200,16 +210,22 @@ def main():
             masks = sample.get('masks', torch.zeros_like(image).to(device=device))
 
             with torch.inference_mode():
-                if isinstance(model, DEC_CLIP):
-                    image_features = model.encode_image(image)
+                text_features = model.encode_text(input_id, attention_mask)
+                if isinstance(model, DEC_CLIP) or 'prompt' not in model.config.model_type:
+                    image_features = model.encode_image(image)                    
                 else:
                     image_features = model.encode_image(image, masks=masks, do_mask=args.do_mask_prompt)
-                text_features = model.encode_text(input_id, attention_mask)
+                
             txt_feats_all.append(text_features.detach().cpu())
             img_feats_all.append(image_features.detach().cpu())
 
         txt_feats_all = torch.cat(txt_feats_all, dim=0)
         img_feats_all = torch.cat(img_feats_all, dim=0)
+
+        if txt_feats_all.ndim > 2:            
+            txt_feats_all = txt_feats_all.mean(dim=1)
+        if img_feats_all.ndim > 2:
+            img_feats_all = img_feats_all.mean(dim=1)
 
         scores_mat = torch.matmul(img_feats_all, txt_feats_all.transpose(0, 1))
 
@@ -249,7 +265,7 @@ def main():
     if args.save_output:
         if not os.path.exists(args.output_dir):
             os.makedirs(args.output_dir)
-
+        
         model_name = args.model_name_or_path.split("/")[-1]
         subset_size = 'full' if args.ignore_split else 'test'
         shape_mode = args.loader_type

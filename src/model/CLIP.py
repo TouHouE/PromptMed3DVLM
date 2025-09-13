@@ -1,3 +1,5 @@
+from functools import partial
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -12,9 +14,10 @@ from src.model.encoder.dcformer import (
     decomp_tiny,
 )
 from src.model.encoder.vit import Vit3D
+from src.model.encoder.m3dvit import ViT as M3DViT
 from src.model.encoder.prompt_dcformer import PromptDCFormerConfig, MaskPromptDCFormer
 from src.model.projector.mlp import MultiLayerPerceptron
-
+from src.model.encoder.utils import wrap_matched_keys
 try:
     import torch.distributed.nn
     from torch import distributed as dist
@@ -22,6 +25,13 @@ try:
     has_distributed = True
 except ImportError:
     has_distributed = False
+
+
+def hgetattr(parent, attr_name, default_value=None, stdout=partial(print, end=""), prefix="", suffix="\n") -> any:
+    if not hasattr(parent, attr_name):
+        stdout(f'{prefix}Can\'t find attribute {attr_name} in {parent}, return {default_value} to instead.{suffix}')
+        return default_value
+    return getattr(parent, attr_name, default_value)
 
 
 class DEC_CLIPConfig(PretrainedConfig):
@@ -67,12 +77,26 @@ class DEC_CLIP(PreTrainedModel):
         super().__init__(config)
 
         self.config = config
+        print(f'The vision_encoder is: {config.vision_encoder}')
 
         if config.vision_encoder == "vit3d":
             self.vision_encoder = Vit3D(
                 input_size=config.input_size,
                 dim=config.dim,
                 depth=config.depth,
+            )
+        elif config.vision_encoder == 'm3dvit':
+            self.vision_encoder = M3DViT(
+                in_channels=hgetattr(config, 'in_channels', 1),
+                img_size=config.input_size,
+                hidden_size=hgetattr(config, 'hidden_size', config.dim),
+                patch_size=hgetattr(config, 'patch_size', (4, 16, 16)),
+                num_layers=hgetattr(config, 'num_layers', 12),
+                num_heads=hgetattr(config, 'num_head', 12),
+                mlp_dim=hgetattr(config, 'mlp_dim', 3072),
+                spatial_dims=len(config.input_size),
+                pos_embed='perceptron',
+                classification=True,
             )
         elif config.vision_encoder == "dcformer":
             self.vision_encoder = decomp_small(input_size=config.input_size)
@@ -84,12 +108,21 @@ class DEC_CLIP(PreTrainedModel):
         self.language_encoder = AutoModel.from_pretrained(
             config.language_model_name_or_path
         )
+        if all(v not in self.config.vision_encoder for v in ['prompt', 'dcformer']):
+            vision_proj_in_channels = self.config.hidden_size
+        else:
+            vision_proj_in_channels = self.vision_encoder.channels[-1]
+
+        if hasattr(self.language_encoder.config, 'dim'):
+            text_proj_in_channels = self.language_encoder.config.dim
+        else:
+            text_proj_in_channels = self.language_encoder.config.hidden_size
 
         self.mm_vision_proj = nn.Linear(
-            self.vision_encoder.channels[-1], config.hidden_size
+            vision_proj_in_channels, config.hidden_size
         )
         self.mm_language_proj = nn.Linear(
-            self.language_encoder.config.dim, config.hidden_size
+            text_proj_in_channels, config.hidden_size
         )
 
         self.efficient_loss = config.efficient_loss
@@ -105,6 +138,9 @@ class DEC_CLIP(PreTrainedModel):
 
     def encode_image(self, image):
         image_feats = self.vision_encoder(image)
+        if isinstance(image_feats, tuple) and not all(torch.is_tensor(_feat) for _feat in image_feats):
+            image_feats = image_feats[-1]
+
         if isinstance(image_feats, list):
             image_feats = image_feats[-1]
         image_feats = image_feats.mean(dim=1)

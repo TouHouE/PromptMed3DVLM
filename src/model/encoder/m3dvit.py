@@ -115,7 +115,9 @@ class ViT(nn.Module):
             # else:
             #     self.classification_head = nn.Linear(hidden_size, num_classes)  # type: ignore
 
-    def forward(self, x, return_hidden_states: bool = True):
+    def forward(self, x, return_hidden_states: bool = False, **kwargs):
+        for key in kwargs.keys():
+            logger.debug(f'In M3DViT::forward|got an unexpected kwarg: {key}')        
         logger.debug(f'm3dvit.py::ViT::forward|x.shape before patch_embedding| {x.shape}')
         x = self.patch_embedding(x)
         # if hasattr(self, "cls_token"):
@@ -131,7 +133,7 @@ class ViT(nn.Module):
         # if hasattr(self, "classification_head"):
         #     x = self.classification_head(x[:, 0])
         if return_hidden_states:
-            return x, hidden_states_out
+            return hidden_states_out
 
         return x
 

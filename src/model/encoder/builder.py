@@ -74,14 +74,16 @@ class VisionTower(nn.Module):
         print(f'builder.py::the vision_tower is {config.vision_tower}')
         # print(f'builder.py::the select_layer is {self.select_layer}')
         # print(f'builder.py::the select_feature is {self.select_feature}')
-        if config.vision_tower == "vit3d":
+        if config.vision_tower == "vit3d" and 'lamed' not in config.model_type:
+            print(f'Declare a `Vit3D`')
             self.vision_tower = Vit3D(
                 input_size=input_size,
                 # dim=config.dim,
                 dim=self.hidden_size,
                 depth=config.depth,
             )
-        elif config.vision_tower == 'm3dvit':
+        elif config.vision_tower == 'm3dvit' or (config.vision_tower == 'vit3d' and 'lamed' in config.model_type):
+            print(f'Declare a `M3DViT`')
             self.vision_tower = M3DViT(
                 in_channels=config.image_channel,
                 img_size=input_size,
@@ -127,14 +129,14 @@ class VisionTower(nn.Module):
                 image_features = image_features[0]
         else:
             raise ValueError(f"Unexpected select layer: {self.select_layer}")
-
-        if self.select_feature == "patch":
+        # print(f'before select feature image_features.shape: {image_features.shape}')
+        if self.select_feature == "patch" and 'lamed' not in self.config.model_type:
             image_features = image_features[:, 1:]
-        elif self.select_feature == "cls_patch":
+        elif self.select_feature == "cls_patch" or 'lamed' in self.config.model_type:
             image_features = image_features
         else:
             raise ValueError(f"Unexpected select feature: {self.select_feature}")
-
+        # print('before return image_features.shape:', image_features.shape)
         return image_features
 
     @property

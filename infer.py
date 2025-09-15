@@ -45,7 +45,7 @@ from monai.config.type_definitions import NdarrayOrTensor
 from tqdm.auto import tqdm
 from torch import nn
 
-from src.model.llm import VLMQwenForCausalLM, LamedLlamaForCausalLM
+from src.model.llm import VLMQwenForCausalLM, LamedLlamaForCausalLM, LamedPhi3ForCausalLM
 from src.dataset import prompt_templates as PT
 
 DEBUG: bool = os.environ.get("DEBUG", "0") == "1"
@@ -200,7 +200,7 @@ def nnunet_scaler(pack):
     return pack
 
 
-def load_model(dst_model_name: str, auto_loading=True) -> HFT.PretrainedModel | nn.Module:
+def load_model(dst_model_name: str, auto_loading=True):
     """
         Don't apply `auto_loading`
     """
@@ -210,9 +210,13 @@ def load_model(dst_model_name: str, auto_loading=True) -> HFT.PretrainedModel | 
                                                             device_map='auto', trust_remote_code=True)
             print(f'Loading from AutoModel')
         except Exception as _:
+            print(f"Loading Failed, Try to use actually model class to load.")
             return load_model(dst_model_name, auto_loading=False)
-    if 'plamed' in load_json(join(dst_model_name, 'config.json'))['model_type']:
-        llm_class = LamedLlamaForCausalLM        
+    vlm_model_type = load_json(join(dst_model_name, 'config.json'))['model_type']
+    if 'lamed' in vlm_model_type and 'llama' in vlm_model_type:
+        llm_class = LamedLlamaForCausalLM
+    elif 'lamed' in vlm_model_type and 'phi' in vlm_model_type:
+        llm_class = LamedPhi3ForCausalLM
     else:
         llm_class = VLMQwenForCausalLM
 
